@@ -1,0 +1,145 @@
+{
+  "name": "testcase-generator",
+  "displayName": "AI Test Case Generator",
+  "description": "Automatically generate comprehensive test cases for code using AI (Anthropic Claude or Google Gemini)",
+  "version": "0.0.1",
+  "publisher": "your-publisher-name",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/ai-testcase-generator"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Testing",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "test",
+    "testing",
+    "ai",
+    "test generation",
+    "unit tests",
+    "claude",
+    "gemini",
+    "jest",
+    "pytest",
+    "junit"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "testcase-generator.generate",
+        "title": "Test Generator: Generate Test Cases",
+        "category": "Test Generator"
+      },
+      {
+        "command": "testcase-generator.generateFromSelection",
+        "title": "Test Generator: Generate from Selection",
+        "category": "Test Generator"
+      },
+      {
+        "command": "testcase-generator.configure",
+        "title": "Test Generator: Configure API Key",
+        "category": "Test Generator"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "testcase-generator.generate",
+          "group": "1_modification",
+          "when": "editorHasSelection == false"
+        },
+        {
+          "command": "testcase-generator.generateFromSelection",
+          "group": "1_modification",
+          "when": "editorHasSelection"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "testcase-generator.generate",
+          "when": "editorIsOpen"
+        },
+        {
+          "command": "testcase-generator.generateFromSelection",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Test Case Generator",
+      "properties": {
+        "testCaseGenerator.apiProvider": {
+          "type": "string",
+          "default": "gemini",
+          "enum": [
+            "anthropic",
+            "gemini"
+          ],
+          "enumDescriptions": [
+            "Use Anthropic Claude (most accurate, requires paid API)",
+            "Use Google Gemini (fast, free tier available)"
+          ],
+          "description": "AI provider to use for test generation"
+        },
+        "testCaseGenerator.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use (leave empty for default). Examples: 'claude-sonnet-4-20250514', 'gemini-2.5-flash', 'gemini-2.0-flash'"
+        },
+        "testCaseGenerator.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 512,
+          "maximum": 8192,
+          "description": "Maximum tokens in AI response (higher = longer tests)"
+        },
+        "testCaseGenerator.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "AI creativity level (0 = focused, 1 = creative)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@babel/parser": "^7.25.9",
+    "@babel/traverse": "^7.25.9",
+    "@babel/types": "^7.25.9",
+    "@google/generative-ai": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/babel__traverse": "^7.20.6",
+    "@types/vscode": "^1.85.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "18.x",
+    "typescript-eslint": "^8.52.0",
+    "eslint": "^9.39.2",
+    "typescript": "^5.3.3",
+    "ts-loader": "^9.5.4",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^6.0.1",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
