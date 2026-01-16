@@ -46,9 +46,45 @@
         "command": "testcase-generator.configure",
         "title": "Test Generator: Configure API Key",
         "category": "Test Generator"
+      },
+      {
+        "command": "testcase-generator.refreshView",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "testcase-generator.openDocs",
+        "title": "Test Generator: Open Documentation",
+        "category": "Test Generator"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "testGenerator",
+          "title": "Test Generator",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "testGenerator": [
+        {
+          "id": "testGeneratorView",
+          "name": "Quick Actions",
+          "icon": "media/icon.svg",
+          "contextualTitle": "AI Test Generator"
+        }
+      ]
+    },
     "menus": {
+      "view/title": [
+        {
+          "command": "testcase-generator.refreshView",
+          "when": "view == testGeneratorView",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "command": "testcase-generator.generate",

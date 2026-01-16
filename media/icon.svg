@@ -1,0 +1,20 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#007ACC"/>
+  
+  <!-- Test tube icon -->
+  <path d="M50 30 L50 75 Q50 85 60 85 L68 85 Q78 85 78 75 L78 30 Z" fill="white" stroke="white" stroke-width="2"/>
+  
+  <!-- Test tube content/liquid -->
+  <path d="M52 60 L52 75 Q52 83 60 83 L68 83 Q76 83 76 75 L76 60 Z" fill="#4CAF50"/>
+  
+  <!-- AI sparkles -->
+  <circle cx="40" cy="45" r="3" fill="#FFD700"/>
+  <circle cx="88" cy="50" r="3" fill="#FFD700"/>
+  <circle cx="85" cy="35" r="2.5" fill="#FFD700"/>
+  <circle cx="43" cy="30" r="2" fill="#FFD700"/>
+  
+  <!-- Code brackets -->
+  <path d="M35 85 L30 90 L35 95" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M93 85 L98 90 L93 95" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

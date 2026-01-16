@@ -10,6 +10,7 @@ import { getConfig, getApiKey, promptForApiKey, storeApiKey } from './config';
 import { getLanguageFromDocument, showLanguageSelector, validateCode } from './languageDetector';
 import { generateTests } from './testCaseGenerator';
 import { createTestCasePanel } from './webviewProvider';
+import { registerSidebarView } from './sidebarProvider';
 import type { SupportedLanguage } from './types';
 
 /**
@@ -17,6 +18,9 @@ import type { SupportedLanguage } from './types';
  */
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Test Case Generator extension is now active');
+
+    // Register sidebar view
+    const sidebarProvider = registerSidebarView(context);
 
     // Register main command: Generate Test Cases
     const generateCommand = vscode.commands.registerCommand(
