@@ -120,7 +120,7 @@ function getWebviewContent(
                             <span class="test-number">#${index + 1}</span>
                             <span class="test-name">${escapeHtml(test.name)}</span>
                             <span class="test-type-badge badge-${test.type}">${test.type}</span>
-                            <button class="copy-btn-small" data-copy="${test.id}">📋 Copy to Clipboard</button>
+                            <button class="copy-btn-small" data-copy="${test.id}">📋 Copy</button>
                         </div>
                         <div class="test-explanation">
                             <p><strong>What this test does:</strong> ${generateTestExplanation(test)}</p>
