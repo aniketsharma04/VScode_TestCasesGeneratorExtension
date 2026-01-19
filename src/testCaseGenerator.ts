@@ -120,47 +120,137 @@ async function generateWithGemini(
  * Build optimized prompt for test generation
  */
 function buildTestPrompt(code: string, language: string, framework: string): string {
-    return `You are an expert software testing engineer. Generate comprehensive unit tests for the following ${language} code.
+    return `You are an expert software testing engineer. Generate comprehensive, RUNNABLE unit tests for the following ${language} code.
 
 CODE TO TEST:
 \`\`\`${language}
 ${code}
 \`\`\`
 
-REQUIREMENTS:
-1. Use ${framework} testing framework
-2. Generate tests for:
-   - Normal/happy path cases (typical usage scenarios)
-   - Edge cases (boundary values, empty inputs, null/undefined, special characters)
-   - Error cases (invalid inputs, exceptions, error handling)
-3. Each test should:
-   - Have a clear, descriptive name explaining what it tests
-   - Include proper setup, execution, and assertion
-   - Test one specific behavior
-   - Include comments explaining the test scenario
-4. Include all necessary imports and setup code at the top
-5. Make tests independent and runnable as-is
-6. Add mocks/stubs for external dependencies if needed
-7. Follow ${framework} best practices and conventions
-8. Aim for high code coverage
+CRITICAL REQUIREMENTS FOR ${framework.toUpperCase()}:
+1. **Import ALL dependencies ONLY ONCE at the very top** - DO NOT repeat imports
+2. **Wrap all tests in a single describe() block**
+3. **Use correct module path** - If testing example.js, use require('./example')
+4. **Generate 5-8 different test cases covering:**
+   - Normal scenarios (2-3 tests)
+   - Edge cases (boundary values, empty, null) (2-3 tests)
+   - Error cases (invalid inputs, exceptions) (1-2 tests)
+5. **Each test must be independent and runnable**
+6. **Use proper ${framework} syntax and matchers**
+7. **Use nested describe blocks** for better organization
 
-OUTPUT FORMAT:
-Provide ONLY the complete, runnable test code. No explanations before or after.
-Start with imports, then test suite/describe block, then individual test cases.
-Make the code ready to copy and run immediately.
+EXACT STRUCTURE (JavaScript/Jest example):
+\`\`\`javascript
+const { add, divide, findMax } = require('./example');
+
+describe('Example Functions', () => {
+  describe('add function', () => {
+    test('should add two positive numbers', () => {
+      expect(add(2, 3)).toBe(5);
+    });
+    
+    test('should handle negative numbers', () => {
+      expect(add(-1, -2)).toBe(-3);
+    });
+  });
+  
+  describe('divide function', () => {
+    test('should divide two numbers', () => {
+      expect(divide(6, 3)).toBe(2);
+    });
+    
+    test('should throw error on division by zero', () => {
+      expect(() => divide(5, 0)).toThrow('Division by zero');
+    });
+  });
+  
+  describe('findMax function', () => {
+    test('should find maximum in array', () => {
+      expect(findMax([1, 5, 3])).toBe(5);
+    });
+    
+    test('should return null for empty array', () => {
+      expect(findMax([])).toBeNull();
+    });
+  });
+});
+\`\`\`
+
+CRITICAL:
+- ONE import statement at top
+- ONE main describe block wrapping everything
+- Nested describe blocks for each function
+- NO explanatory text before/after code
+- COMPLETE, RUNNABLE code only
+- Use appropriate matchers: .toBe(), .toEqual(), .toThrow(), .toBeNull()
 
 Generate the tests now:`;
+}
+
+/**
+ * Clean and validate generated test code
+ */
+function cleanGeneratedTests(rawCode: string, language: string): string {
+    let cleaned = rawCode;
+    
+    // Remove markdown code blocks
+    cleaned = cleaned.replace(/```[\w]*\n?/g, '').trim();
+    
+    if (language === 'javascript' || language === 'typescript') {
+        // Fix duplicate imports - keep only first occurrence
+        const lines = cleaned.split('\n');
+        const imports = new Set<string>();
+        const importLines: string[] = [];
+        const codeLines: string[] = [];
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            // Check if it's an import/require line
+            if ((trimmed.startsWith('const ') || trimmed.startsWith('import ')) && 
+                (trimmed.includes('require(') || trimmed.includes('from '))) {
+                
+                // Normalize whitespace for comparison
+                const normalized = trimmed.replace(/\s+/g, ' ');
+                
+                // Only add if we haven't seen this import before
+                if (!imports.has(normalized)) {
+                    imports.add(normalized);
+                    importLines.push(line);
+                }
+            } else if (trimmed) {
+                codeLines.push(line);
+            }
+        }
+        
+        // Reconstruct: imports first, then other code
+        cleaned = [...importLines, '', ...codeLines].join('\n');
+        
+        // Ensure all tests are wrapped in describe block if missing
+        if (!cleaned.includes('describe(')) {
+            const hasTests = cleaned.includes('test(') || cleaned.includes('it(');
+            if (hasTests) {
+                const withoutImports = codeLines.join('\n');
+                cleaned = [
+                    ...importLines,
+                    '',
+                    "describe('Generated Tests', () => {",
+                    ...withoutImports.split('\n').map(l => l ? '  ' + l : ''),
+                    '});'
+                ].join('\n');
+            }
+        }
+    }
+    
+    return cleaned;
 }
 
 /**
  * Parse AI response to extract test cases
  */
 function parseTestCases(response: string, language: string, framework: string): GeneratedTests {
-    // Remove markdown code blocks if present
-    let cleanCode = response.replace(/```[\w]*\n/g, '').replace(/```$/g, '').trim();
-    
-    // If there are still backticks at the end, remove them
-    cleanCode = cleanCode.replace(/```\s*$/g, '').trim();
+    // Clean the response first
+    const cleanCode = cleanGeneratedTests(response, language);
     
     const lines = cleanCode.split('\n');
     let imports = '';
@@ -225,8 +315,8 @@ function parseTestCases(response: string, language: string, framework: string): 
 function extractJestTests(code: string, imports: string = ''): TestCase[] {
     const tests: TestCase[] = [];
     
-    // Match test() or it() blocks
-    const testRegex = /(it|test)\s*\(\s*['"`](.*?)['"`]\s*,\s*(?:async\s*)?\(\s*\)\s*=>\s*\{/g;
+    // Match test() or it() blocks with better regex
+    const testRegex = /(?:test|it)\s*\(\s*['`"](.*?)['`"]\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{([\s\S]*?)\n\s*\}\s*\)/g;
     const matches = [...code.matchAll(testRegex)];
     
     for (const match of matches) {

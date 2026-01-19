@@ -3,7 +3,12 @@
  */
 
 import * as vscode from 'vscode';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import type { GeneratedTests } from './types';
+
+const execAsync = promisify(exec);
+let outputChannel: vscode.OutputChannel | null = null;
 
 /**
  * Create and show WebView panel
@@ -31,7 +36,7 @@ export function createTestCasePanel(
 
     // Handle messages from WebView
     panel.webview.onDidReceiveMessage(
-        message => handleWebviewMessage(message, panel, tests),
+        message => handleWebviewMessage(message, panel, tests, context),
         undefined,
         context.subscriptions
     );
@@ -139,7 +144,8 @@ function getWebviewContent(
             window.testData = ${JSON.stringify({ 
                 fullCode: tests.fullCode, 
                 testCases: tests.testCases,
-                language: tests.language 
+                language: tests.language,
+                framework: tests.framework
             })};
         </script>
         <script nonce="${nonce}" src="${scriptUri}"></script>
@@ -151,7 +157,12 @@ function getWebviewContent(
 /**
  * Handle messages from WebView to extension
  */
-async function handleWebviewMessage(message: any, panel: vscode.WebviewPanel, tests: GeneratedTests): Promise<void> {
+async function handleWebviewMessage(
+    message: any, 
+    panel: vscode.WebviewPanel, 
+    tests: GeneratedTests,
+    context: vscode.ExtensionContext
+): Promise<void> {
     switch (message.command) {
         case 'copy':
             vscode.window.showInformationMessage('✅ Copied to clipboard!');
@@ -162,7 +173,11 @@ async function handleWebviewMessage(message: any, panel: vscode.WebviewPanel, te
             break;
 
         case 'runTests':
-            await runTestsInTerminal(message.content);
+            await runTestsWithFrameworkCheck(
+                message.content, 
+                message.language, 
+                message.framework
+            );
             break;
 
         case 'error':
@@ -209,33 +224,398 @@ async function saveTestsToFile(content: string, language: string): Promise<void>
 }
 
 /**
- * Run tests in terminal
+ * Run tests in terminal with temporary file creation
  */
-async function runTestsInTerminal(testCode: string): Promise<void> {
+async function runTestsInTerminal(
+    testCode: string,
+    language: string,
+    framework: string
+): Promise<void> {
     try {
-        const terminal = vscode.window.createTerminal('Test Runner');
-        terminal.show();
-
-        // Try to detect test command based on project
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (workspaceFolder) {
-            const packageJsonUri = vscode.Uri.joinPath(workspaceFolder.uri, 'package.json');
-            try {
-                const packageJson = await vscode.workspace.fs.readFile(packageJsonUri);
-                const packageData = JSON.parse(packageJson.toString());
-
-                if (packageData.scripts?.test) {
-                    terminal.sendText('npm test');
-                    return;
-                }
-            } catch {
-                // File doesn't exist or can't be parsed
-            }
+        
+        if (!workspaceFolder) {
+            vscode.window.showErrorMessage('No workspace folder found. Please open a folder first.');
+            return;
         }
 
-        vscode.window.showWarningMessage('No test script found. Please run tests manually or configure your test command.');
+        // Create temporary test file
+        const tempFileName = getTempTestFileName(language, framework);
+        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
+        
+        // FIX MODULE PATHS BEFORE WRITING FILE
+        const fixedCode = await fixModulePaths(testCode, language);
+        
+        // Write test code to file with fixed paths
+        const encoder = new TextEncoder();
+        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+        
+        // Get test command based on language and framework
+        const testCommand = getTestCommand(language, framework, tempFileName);
+        
+        if (!testCommand) {
+            vscode.window.showErrorMessage(`Unable to determine test command for ${language} with ${framework}`);
+            return;
+        }
+        
+        // Create and show terminal
+        const terminal = vscode.window.createTerminal({
+            name: 'Test Runner',
+            cwd: workspaceFolder.uri.fsPath
+        });
+        
+        terminal.show();
+        
+        // Show info message
+        vscode.window.showInformationMessage(`Running tests with ${framework}...`);
+        
+        // Run the test command
+        terminal.sendText(testCommand);
+        
+        // Optional: Clean up after a delay
+        setTimeout(async () => {
+            const shouldDelete = await vscode.window.showQuickPick(
+                ['Yes', 'No'],
+                { 
+                    placeHolder: `Delete temporary test file (${tempFileName})?` 
+                }
+            );
+            
+            if (shouldDelete === 'Yes') {
+                try {
+                    await vscode.workspace.fs.delete(tempFilePath);
+                    vscode.window.showInformationMessage('Temporary test file deleted.');
+                } catch (error) {
+                    console.error('Failed to delete temp file:', error);
+                }
+            }
+        }, 5000); // Wait 5 seconds before asking
+        
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to run tests: ${error.message}`);
+        console.error('Run tests error:', error);
+    }
+}
+
+/**
+ * Fix module paths in generated test code
+ */
+async function fixModulePaths(testCode: string, language: string): Promise<string> {
+    if (language !== 'javascript' && language !== 'typescript') {
+        return testCode;
+    }
+    
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        return testCode;
+    }
+    
+    // Get the current file name without extension
+    const uri = editor.document.uri;
+    const fileName = uri.path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'module';
+    
+    // Replace common placeholder paths with actual file name
+    let fixed = testCode
+        .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${fileName}')`)
+        .replace(/require\(['"]\.\/module['"]\)/g, `require('./${fileName}')`)
+        .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${fileName}'`)
+        .replace(/from\s+['"]\.\/module['"]/g, `from './${fileName}'`);
+    
+    return fixed;
+}
+
+/**
+ * Run tests with output channel for better results display
+ */
+async function runTestsWithOutput(
+    testCode: string,
+    language: string,
+    framework: string
+): Promise<void> {
+    try {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        
+        if (!workspaceFolder) {
+            vscode.window.showErrorMessage('No workspace folder found.');
+            return;
+        }
+
+        // Create output channel if it doesn't exist
+        if (!outputChannel) {
+            outputChannel = vscode.window.createOutputChannel('Test Results');
+        }
+        
+        outputChannel.clear();
+        outputChannel.show();
+        outputChannel.appendLine('='.repeat(80));
+        outputChannel.appendLine(`Running ${framework} tests...`);
+        outputChannel.appendLine('='.repeat(80));
+        outputChannel.appendLine('');
+
+        // Create temp file
+        const tempFileName = getTempTestFileName(language, framework);
+        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
+        
+        // FIX MODULE PATHS BEFORE WRITING FILE
+        const fixedCode = await fixModulePaths(testCode, language);
+        
+        // Write fixed code to temp file
+        const encoder = new TextEncoder();
+        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+
+        // Get test command
+        const testCommand = getTestCommand(language, framework, tempFileName);
+        
+        if (!testCommand) {
+            outputChannel.appendLine(`❌ Error: No test command found for ${language} with ${framework}`);
+            return;
+        }
+
+        outputChannel.appendLine(`Command: ${testCommand}`);
+        outputChannel.appendLine('');
+
+        // Execute tests
+        try {
+            const { stdout, stderr } = await execAsync(testCommand, {
+                cwd: workspaceFolder.uri.fsPath,
+                timeout: 30000 // 30 second timeout
+            });
+
+            if (stdout) {
+                outputChannel.appendLine('OUTPUT:');
+                outputChannel.appendLine(stdout);
+            }
+
+            if (stderr) {
+                outputChannel.appendLine('ERRORS:');
+                outputChannel.appendLine(stderr);
+            }
+
+            outputChannel.appendLine('');
+            outputChannel.appendLine('='.repeat(80));
+            outputChannel.appendLine('✅ Tests completed successfully!');
+            
+            vscode.window.showInformationMessage('✅ Tests completed! Check Output panel for results.');
+
+        } catch (execError: any) {
+            outputChannel.appendLine('ERROR:');
+            outputChannel.appendLine(execError.stdout || '');
+            outputChannel.appendLine(execError.stderr || '');
+            outputChannel.appendLine('');
+            outputChannel.appendLine('='.repeat(80));
+            outputChannel.appendLine('❌ Tests failed or encountered errors.');
+            
+            vscode.window.showErrorMessage('❌ Tests failed. Check Output panel for details.');
+        }
+
+        // Clean up temp file
+        try {
+            await vscode.workspace.fs.delete(tempFilePath);
+            outputChannel.appendLine(`Cleaned up temporary file: ${tempFileName}`);
+        } catch {
+            outputChannel.appendLine(`Note: Temporary file ${tempFileName} may still exist.`);
+        }
+
+    } catch (error: any) {
+        vscode.window.showErrorMessage(`Failed to run tests: ${error.message}`);
+    }
+}
+
+/**
+ * Get temporary test file name based on language and framework
+ */
+function getTempTestFileName(language: string, framework: string): string {
+    const timestamp = Date.now();
+    
+    const fileNames: { [key: string]: string } = {
+        'javascript-jest': `temp.test.${timestamp}.js`,
+        'javascript-mocha': `temp.test.${timestamp}.js`,
+        'javascript-jasmine': `temp.test.${timestamp}.js`,
+        'typescript-jest': `temp.test.${timestamp}.ts`,
+        'typescript-mocha': `temp.test.${timestamp}.ts`,
+        'typescript-vitest': `temp.test.${timestamp}.ts`,
+        'python-pytest': `test_temp_${timestamp}.py`,
+        'python-unittest': `test_temp_${timestamp}.py`,
+        'java-junit': `TempTest${timestamp}.java`,
+        'java-testng': `TempTest${timestamp}.java`,
+        'go-testing': `temp_test_${timestamp}.go`,
+        'rust-cargo': `temp_test_${timestamp}.rs`,
+        'cpp-gtest': `temp_test_${timestamp}.cpp`,
+        'cpp-catch2': `temp_test_${timestamp}.cpp`,
+        'csharp-nunit': `TempTest${timestamp}.cs`,
+        'csharp-xunit': `TempTest${timestamp}.cs`,
+        'ruby-rspec': `temp_spec_${timestamp}.rb`,
+        'ruby-minitest': `temp_test_${timestamp}.rb`,
+        'php-phpunit': `TempTest${timestamp}.php`
+    };
+    
+    const key = `${language}-${framework}`;
+    return fileNames[key] || `temp_test_${timestamp}.txt`;
+}
+
+/**
+ * Get the appropriate test command based on language and framework
+ */
+function getTestCommand(language: string, framework: string, fileName: string): string | null {
+    const commands: { [key: string]: string } = {
+        // JavaScript/TypeScript
+        'javascript-jest': `npx jest ${fileName}`,
+        'javascript-mocha': `npx mocha ${fileName}`,
+        'javascript-jasmine': `npx jasmine ${fileName}`,
+        'typescript-jest': `npx jest ${fileName}`,
+        'typescript-mocha': `npx ts-mocha ${fileName}`,
+        'typescript-vitest': `npx vitest run ${fileName}`,
+        
+        // Python
+        'python-pytest': `pytest ${fileName} -v`,
+        'python-unittest': `python -m unittest ${fileName}`,
+        
+        // Java
+        'java-junit': `javac ${fileName} && java org.junit.runner.JUnitCore ${fileName.replace('.java', '')}`,
+        'java-testng': `java -cp .:testng.jar org.testng.TestNG ${fileName}`,
+        
+        // Go
+        'go-testing': `go test ${fileName} -v`,
+        
+        // Rust
+        'rust-cargo': `cargo test --test ${fileName.replace('.rs', '')}`,
+        
+        // C++
+        'cpp-gtest': `g++ ${fileName} -lgtest -lgtest_main -pthread && ./a.out`,
+        'cpp-catch2': `g++ ${fileName} -o test && ./test`,
+        
+        // C#
+        'csharp-nunit': `dotnet test ${fileName}`,
+        'csharp-xunit': `dotnet test ${fileName}`,
+        
+        // Ruby
+        'ruby-rspec': `rspec ${fileName}`,
+        'ruby-minitest': `ruby ${fileName}`,
+        
+        // PHP
+        'php-phpunit': `phpunit ${fileName}`
+    };
+    
+    const key = `${language}-${framework}`;
+    return commands[key] || null;
+}
+
+/**
+ * Check if testing framework is installed in the project
+ */
+async function checkFrameworkInstalled(framework: string): Promise<boolean> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+        return false;
+    }
+
+    try {
+        // Check package.json for JavaScript/TypeScript
+        if (['jest', 'mocha', 'jasmine', 'vitest'].includes(framework)) {
+            const packageJsonPath = vscode.Uri.joinPath(workspaceFolder.uri, 'package.json');
+            try {
+                const packageJsonContent = await vscode.workspace.fs.readFile(packageJsonPath);
+                const packageJson = JSON.parse(packageJsonContent.toString());
+                
+                const allDeps = {
+                    ...packageJson.dependencies,
+                    ...packageJson.devDependencies
+                };
+                
+                return framework in allDeps || `@types/${framework}` in allDeps;
+            } catch {
+                return false;
+            }
+        }
+        
+        // Check requirements.txt for Python
+        if (framework === 'pytest') {
+            const requirementsPath = vscode.Uri.joinPath(workspaceFolder.uri, 'requirements.txt');
+            try {
+                const requirementsContent = await vscode.workspace.fs.readFile(requirementsPath);
+                return requirementsContent.toString().includes('pytest');
+            } catch {
+                return false;
+            }
+        }
+        
+        // For other frameworks, assume installed
+        return true;
+        
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Install testing framework
+ */
+async function installFramework(framework: string): Promise<void> {
+    const terminal = vscode.window.createTerminal('Install Test Framework');
+    terminal.show();
+    
+    const installCommands: { [key: string]: string } = {
+        'jest': 'npm install --save-dev jest',
+        'mocha': 'npm install --save-dev mocha',
+        'jasmine': 'npm install --save-dev jasmine',
+        'vitest': 'npm install --save-dev vitest',
+        'pytest': 'pip install pytest'
+    };
+    
+    const command = installCommands[framework];
+    if (command) {
+        terminal.sendText(command);
+        vscode.window.showInformationMessage(`Installing ${framework}...`);
+    }
+}
+
+/**
+ * Enhanced run tests with framework check
+ */
+async function runTestsWithFrameworkCheck(
+    testCode: string,
+    language: string,
+    framework: string
+): Promise<void> {
+    // Check if framework is installed
+    const isInstalled = await checkFrameworkInstalled(framework);
+    
+    if (!isInstalled) {
+        const install = await vscode.window.showWarningMessage(
+            `${framework} is not installed in this project. Would you like to install it?`,
+            'Install', 'Run Anyway', 'Cancel'
+        );
+        
+        if (install === 'Install') {
+            await installFramework(framework);
+            vscode.window.showInformationMessage(`Please wait for ${framework} to install, then try running tests again.`);
+            return;
+        } else if (install === 'Cancel') {
+            return;
+        }
+        // If 'Run Anyway', proceed below
+    }
+    
+    // Ask user which method to use
+    const method = await vscode.window.showQuickPick(
+        [
+            { label: 'Terminal', description: 'Run tests in integrated terminal (real-time output)' },
+            { label: 'Output Panel', description: 'Run tests and show results in output panel' }
+        ],
+        {
+            placeHolder: 'Choose how to run tests'
+        }
+    );
+    
+    if (!method) {
+        return;
+    }
+    
+    // Proceed with running tests
+    if (method.label === 'Terminal') {
+        await runTestsInTerminal(testCode, language, framework);
+    } else {
+        await runTestsWithOutput(testCode, language, framework);
     }
 }
 

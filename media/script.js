@@ -108,7 +108,45 @@
     function runTests() {
         vscode.postMessage({
             command: 'runTests',
-            content: testData.fullCode
+            content: testData.fullCode,
+            language: getLanguageFromTestData(),
+            framework: getFrameworkFromTestData()
         });
+    }
+    
+    /**
+     * Extract language from test data or HTML
+     */
+    function getLanguageFromTestData() {
+        // Try to get from test data
+        if (window.testData && window.testData.language) {
+            return window.testData.language;
+        }
+        
+        // Fallback: try to extract from badge
+        const languageBadge = document.querySelector('.badge-language');
+        if (languageBadge) {
+            return languageBadge.textContent.toLowerCase();
+        }
+        
+        return 'javascript'; // Default fallback
+    }
+    
+    /**
+     * Extract framework from test data or HTML
+     */
+    function getFrameworkFromTestData() {
+        // Try to get from test data
+        if (window.testData && window.testData.framework) {
+            return window.testData.framework;
+        }
+        
+        // Fallback: try to extract from badge
+        const frameworkBadge = document.querySelector('.badge-framework');
+        if (frameworkBadge) {
+            return frameworkBadge.textContent.toLowerCase();
+        }
+        
+        return 'jest'; // Default fallback
     }
 })();
