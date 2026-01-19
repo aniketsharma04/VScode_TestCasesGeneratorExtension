@@ -177,7 +177,7 @@ function parseTestCases(response: string, language: string, framework: string): 
         imports = importLines.join('\n');
         
         // Extract individual test cases
-        testCases.push(...extractJestTests(cleanCode));
+        testCases.push(...extractJestTests(cleanCode, imports));
     } else if (language === 'python') {
         const importLines = lines.filter(line => {
             const trimmed = line.trim();
@@ -186,12 +186,12 @@ function parseTestCases(response: string, language: string, framework: string): 
         imports = importLines.join('\n');
         
         // Extract individual test cases
-        testCases.push(...extractPytestTests(cleanCode));
+        testCases.push(...extractPytestTests(cleanCode, imports));
     } else if (language === 'java') {
         const importLines = lines.filter(line => line.trim().startsWith('import '));
         imports = importLines.join('\n');
         
-        testCases.push(...extractJUnitTests(cleanCode));
+        testCases.push(...extractJUnitTests(cleanCode, imports));
     } else {
         // For other languages, treat whole code as one test
         testCases.push({
@@ -222,7 +222,7 @@ function parseTestCases(response: string, language: string, framework: string): 
 /**
  * Extract individual Jest/Mocha test cases
  */
-function extractJestTests(code: string): TestCase[] {
+function extractJestTests(code: string, imports: string = ''): TestCase[] {
     const tests: TestCase[] = [];
     
     // Match test() or it() blocks
@@ -257,10 +257,13 @@ function extractJestTests(code: string): TestCase[] {
         
         const testCode = code.substring(startIndex, endIndex).trim();
         
+        // Combine imports with test code for standalone execution
+        const fullTestCode = imports ? `${imports}\n\n${testCode}` : testCode;
+        
         tests.push({
             id: generateId(),
             name: testName,
-            code: testCode,
+            code: fullTestCode,
             type: determineTestType(testName),
             framework: 'jest'
         });
@@ -272,7 +275,7 @@ function extractJestTests(code: string): TestCase[] {
 /**
  * Extract Pytest test cases
  */
-function extractPytestTests(code: string): TestCase[] {
+function extractPytestTests(code: string, imports: string = ''): TestCase[] {
     const tests: TestCase[] = [];
     const lines = code.split('\n');
     
@@ -297,10 +300,13 @@ function extractPytestTests(code: string): TestCase[] {
             
             const testCode = lines.slice(i, endLine + 1).join('\n');
             
+            // Combine imports with test code
+            const fullTestCode = imports ? `${imports}\n\n${testCode}` : testCode;
+            
             tests.push({
                 id: generateId(),
                 name: testName,
-                code: testCode,
+                code: fullTestCode,
                 type: determineTestType(testName),
                 framework: 'pytest'
             });
@@ -313,7 +319,7 @@ function extractPytestTests(code: string): TestCase[] {
 /**
  * Extract JUnit test cases
  */
-function extractJUnitTests(code: string): TestCase[] {
+function extractJUnitTests(code: string, imports: string = ''): TestCase[] {
     const tests: TestCase[] = [];
     
     // Match @Test methods
@@ -339,10 +345,13 @@ function extractJUnitTests(code: string): TestCase[] {
         
         const testCode = code.substring(startIndex, endIndex).trim();
         
+        // Combine imports with test code
+        const fullTestCode = imports ? `${imports}\n\n${testCode}` : testCode;
+        
         tests.push({
             id: generateId(),
             name: testName,
-            code: testCode,
+            code: fullTestCode,
             type: determineTestType(testName),
             framework: 'junit'
         });

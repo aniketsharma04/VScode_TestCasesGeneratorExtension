@@ -13,10 +13,13 @@
     }
     
     function initializeEventListeners() {
-        // Copy All button
+        // Copy All button - copy all test cases combined (clean version)
         const copyAllBtn = document.getElementById('copyAll');
         if (copyAllBtn) {
-            copyAllBtn.addEventListener('click', () => copyToClipboard(testData.fullCode, copyAllBtn));
+            copyAllBtn.addEventListener('click', () => {
+                const allTests = testData.testCases.map(t => cleanTestCode(t.code)).join('\n\n');
+                copyToClipboard(allTests, copyAllBtn);
+            });
         }
         
         // Save File button
@@ -31,17 +34,6 @@
             runTestsBtn.addEventListener('click', () => runTests());
         }
         
-        // Individual copy buttons in code blocks
-        const copyBtns = document.querySelectorAll('.copy-btn[data-copy]');
-        copyBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const target = e.currentTarget.getAttribute('data-copy');
-                if (target === 'full') {
-                    copyToClipboard(testData.fullCode, e.currentTarget);
-                }
-            });
-        });
-        
         // Small copy buttons for individual tests
         const smallCopyBtns = document.querySelectorAll('.copy-btn-small[data-copy]');
         smallCopyBtns.forEach(btn => {
@@ -49,10 +41,30 @@
                 const testId = e.currentTarget.getAttribute('data-copy');
                 const testCase = testData.testCases.find(t => t.id === testId);
                 if (testCase) {
-                    copyToClipboard(testCase.code, e.currentTarget);
+                    const cleanCode = cleanTestCode(testCase.code);
+                    copyToClipboard(cleanCode, e.currentTarget);
                 }
             });
         });
+    }
+    
+    // Helper function to clean test code
+    function cleanTestCode(code) {
+        const lines = code.split('\n');
+        const cleanedLines = [];
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            // Skip comment-only lines like "// Arrange", "// Act", "// Assert", "// Scenario:"
+            if (trimmed === '// Arrange' || trimmed === '// Act' || trimmed === '// Assert' || 
+                trimmed === '// Setup' || trimmed === '// Execute' || trimmed === '// Verify' ||
+                trimmed.startsWith('// Scenario:')) {
+                continue;
+            }
+            cleanedLines.push(line);
+        }
+        
+        return cleanedLines.join('\n');
     }
     
     async function copyToClipboard(text, button) {

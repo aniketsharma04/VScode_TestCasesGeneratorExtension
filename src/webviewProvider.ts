@@ -111,27 +111,22 @@ function getWebviewContent(
 
         <!-- Test Cases Display -->
         <div class="test-cases">
-            <div class="section">
-                <h2>Complete Test File</h2>
-                <div class="code-block">
-                    <button class="copy-btn" data-copy="full">Copy</button>
-                    <pre><code class="language-${escapeHtml(tests.language)}">${escapeHtml(tests.fullCode)}</code></pre>
-                </div>
-            </div>
-
             ${tests.testCases.length > 0 ? `
             <div class="section">
-                <h2>Individual Test Cases</h2>
+                <h2>Generated Test Cases</h2>
                 ${tests.testCases.map((test, index) => `
                     <div class="test-case test-${test.type}">
                         <div class="test-header">
                             <span class="test-number">#${index + 1}</span>
                             <span class="test-name">${escapeHtml(test.name)}</span>
                             <span class="test-type-badge badge-${test.type}">${test.type}</span>
-                            <button class="copy-btn-small" data-copy="${test.id}">Copy</button>
+                            <button class="copy-btn-small" data-copy="${test.id}">📋 Copy to Clipboard</button>
+                        </div>
+                        <div class="test-explanation">
+                            <p><strong>What this test does:</strong> ${generateTestExplanation(test)}</p>
                         </div>
                         <div class="test-code">
-                            <pre><code class="language-${escapeHtml(tests.language)}" id="${test.id}">${escapeHtml(test.code)}</code></pre>
+                            <pre><code class="language-${escapeHtml(tests.language)}" id="${test.id}">${escapeHtml(getCleanTestCode(test.code))}</code></pre>
                         </div>
                     </div>
                 `).join('')}
@@ -261,6 +256,47 @@ function getFileExtension(language: string): string {
         'php': 'Test.php'
     };
     return extensions[language] || '.test.txt';
+}
+
+/**
+ * Generate human-readable explanation for a test case
+ */
+function generateTestExplanation(test: any): string {
+    const name = test.name.toLowerCase();
+    
+    // Extract key information from test name
+    if (name.includes('error') || name.includes('throw') || name.includes('invalid')) {
+        return `Verifies that the function properly handles error scenarios and throws appropriate exceptions when given invalid input.`;
+    } else if (name.includes('edge') || name.includes('empty') || name.includes('null') || name.includes('zero')) {
+        return `Tests edge cases and boundary conditions to ensure the function behaves correctly with unusual or extreme input values.`;
+    } else if (name.includes('negative')) {
+        return `Checks how the function handles negative values to ensure proper validation and processing.`;
+    } else if (name.includes('multiple') || name.includes('array') || name.includes('collection')) {
+        return `Tests the function with multiple items or collections to verify it processes them correctly.`;
+    } else {
+        return `Validates the standard functionality with typical input values to ensure the function works as expected.`;
+    }
+}
+
+/**
+ * Clean test code by removing excessive comments but keeping structure
+ */
+function getCleanTestCode(code: string): string {
+    const lines = code.split('\n');
+    const cleanedLines: string[] = [];
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        // Skip comment-only lines like "// Arrange", "// Act", "// Assert", "// Scenario:"
+        if (trimmed === '// Arrange' || trimmed === '// Act' || trimmed === '// Assert' || 
+            trimmed === '// Setup' || trimmed === '// Execute' || trimmed === '// Verify' ||
+            trimmed.startsWith('// Scenario:')) {
+            continue;
+        }
+        cleanedLines.push(line);
+    }
+    
+    return cleanedLines.join('\n');
 }
 
 /**

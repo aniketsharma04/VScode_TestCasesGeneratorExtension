@@ -63,7 +63,10 @@
         {
           "id": "testGenerator",
           "title": "Test Generator",
-          "icon": "media/icon.svg"
+          "icon": {
+            "light": "media/navyug-icon-light.svg",
+            "dark": "media/navyug-icon-dark.svg"
+          }
         }
       ]
     },
@@ -72,7 +75,6 @@
         {
           "id": "testGeneratorView",
           "name": "Quick Actions",
-          "icon": "media/icon.svg",
           "contextualTitle": "AI Test Generator"
         }
       ]
