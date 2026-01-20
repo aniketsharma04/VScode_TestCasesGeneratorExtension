@@ -493,7 +493,7 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'typescript-vitest': `npx vitest run ${fileName}`,
         
         // Python
-        'python-pytest': `pytest ./${fileName} -v`,
+        'python-pytest': `python -m pytest ./${fileName} -v`,
         'python-unittest': `python -m unittest ${fileName}`,
         
         // Java - Using Maven
@@ -530,8 +530,11 @@ function getTestCommand(language: string, framework: string, fileName: string): 
  * Check if testing framework is installed in the project
  */
 async function checkFrameworkInstalled(framework: string): Promise<boolean> {
+    console.log(`[Framework Check] Checking if ${framework} is installed...`);
+    
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
+        console.log('[Framework Check] No workspace folder found');
         return false;
     }
 
@@ -548,20 +551,40 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
                     ...packageJson.devDependencies
                 };
                 
-                return framework in allDeps || `@types/${framework}` in allDeps;
+                const installed = framework in allDeps || `@types/${framework}` in allDeps;
+                console.log(`[Framework Check] ${framework} in package.json: ${installed}`);
+                return installed;
             } catch {
                 return false;
             }
         }
         
-        // Check requirements.txt for Python
+        // Check pytest by running command (check if executable exists)
         if (framework === 'pytest') {
-            const requirementsPath = vscode.Uri.joinPath(workspaceFolder.uri, 'requirements.txt');
+            console.log('[Framework Check] Checking pytest installation...');
             try {
-                const requirementsContent = await vscode.workspace.fs.readFile(requirementsPath);
-                return requirementsContent.toString().includes('pytest');
-            } catch {
-                return false;
+                const { exec } = require('child_process');
+                const { promisify } = require('util');
+                const execAsync = promisify(exec);
+                
+                // Use 'python -m pytest' instead of 'pytest' to avoid PATH issues
+                const { stdout } = await execAsync('python -m pytest --version');
+                console.log('[Framework Check] pytest --version output:', stdout);
+                console.log('[Framework Check] pytest IS installed ✓');
+                return true; // pytest is installed and executable
+            } catch (error: any) {
+                console.log('[Framework Check] pytest command failed:', error.message);
+                // Also check requirements.txt as fallback
+                const requirementsPath = vscode.Uri.joinPath(workspaceFolder.uri, 'requirements.txt');
+                try {
+                    const requirementsContent = await vscode.workspace.fs.readFile(requirementsPath);
+                    const installed = requirementsContent.toString().includes('pytest');
+                    console.log('[Framework Check] pytest in requirements.txt:', installed);
+                    return installed;
+                } catch {
+                    console.log('[Framework Check] No requirements.txt found');
+                    return false;
+                }
             }
         }
         

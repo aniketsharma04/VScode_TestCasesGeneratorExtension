@@ -48,7 +48,9 @@ export async function generateTests(
         if (error.status === 401 || error.message?.includes('401')) {
             throw new Error('Invalid API key. Please configure your API key using the "Configure API Key" command.');
         } else if (error.status === 429 || error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED')) {
-            throw new Error('API rate limit exceeded. Please try again later or check your API quota.');
+            throw new Error('API rate limit exceeded. Please try again later or check your API quota at https://ai.dev/rate-limit');
+        } else if (error.status === 503 || error.message?.includes('503') || error.message?.includes('overloaded')) {
+            throw new Error('Gemini servers are overloaded. Please wait a few seconds and try again. (Error 503)');
         } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
             throw new Error('Network error. Please check your internet connection.');
         } else if (error.message?.includes('API key') || error.message?.includes('API_KEY_INVALID')) {
