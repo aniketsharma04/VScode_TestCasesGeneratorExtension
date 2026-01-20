@@ -63,10 +63,7 @@
         {
           "id": "testGenerator",
           "title": "Test Generator",
-          "icon": {
-            "light": "media/navyug-icon-light.svg",
-            "dark": "media/navyug-icon-dark.svg"
-          }
+          "icon": "media/navyug-icon-light.svg"
         }
       ]
     },
