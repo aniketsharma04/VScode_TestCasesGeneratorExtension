@@ -29,8 +29,10 @@
 
 ### Core Capabilities
 - ✨ **Automatic Test Generation**: Generate complete, runnable test cases with one command
-- 🎯 **Multi-Language Support**: JavaScript, TypeScript, Python, Java, Go, Rust, C++, C#, Ruby, PHP
+- 🎯 **Multi-Language Support**: JavaScript, TypeScript, Python, Java (with more coming soon)
 - 🧪 **Comprehensive Coverage**: Normal cases, edge cases, and error handling tests
+- ▶️ **Run Tests Directly**: Execute generated tests in terminal or output panel
+- 🔧 **Auto Framework Detection**: Detects and installs Jest, Pytest, JUnit automatically
 - 📋 **Easy Copy**: Copy all tests or individual test cases with one click
 - 💾 **Save to File**: Save generated tests directly to a file
 - 🎨 **Beautiful UI**: Modern, VS Code-themed interface
@@ -40,9 +42,53 @@
 - 🔒 **Secure Storage**: API keys encrypted in VS Code Secrets
 - 🌳 **AST Parsing**: Uses Babel parser for JavaScript/TypeScript code analysis
 - 🎯 **Smart Detection**: Automatic language and framework detection
+- 🔄 **Module Path Auto-Fixing**: Automatically corrects import paths in generated tests
 - 📊 **Test Categorization**: Automatically categorizes tests (normal/edge/error)
 - 🔄 **Real-time Processing**: Progress indicators and streaming responses
 - 🎨 **Custom WebView**: Rich UI with syntax highlighting and interactive controls
+- 🚀 **Framework Auto-Installation**: Prompts to install missing test frameworks
+
+---
+
+## 🌍 Supported Languages
+
+| Language | Status | Framework | Run Tests |
+|----------|--------|-----------|-----------|
+| **JavaScript** | ✅ Fully Working | Jest, Mocha, Jasmine | ✅ Supported |
+| **TypeScript** | ✅ Fully Working | Jest, Mocha, Vitest | ✅ Supported |
+| **Python** | ✅ Fully Working | Pytest, unittest | ✅ Supported |
+| **Java** | 🔧 Setup Required | JUnit 5, TestNG | ✅ Supported* |
+| Go | 📝 Planned | testing | 🔜 Coming Soon |
+| Rust | 📝 Planned | cargo test | 🔜 Coming Soon |
+| C++ | 📝 Planned | gtest, catch2 | 🔜 Coming Soon |
+| C# | 📝 Planned | NUnit, XUnit | 🔜 Coming Soon |
+| Ruby | 📝 Planned | RSpec, Minitest | 🔜 Coming Soon |
+| PHP | 📝 Planned | PHPUnit | 🔜 Coming Soon |
+
+\* Java requires JDK 11+ and Maven installation. See [javasetup.md](javasetup.md) for details.
+
+### Language-Specific Features
+
+#### JavaScript/TypeScript
+- ✅ AST-based code analysis
+- ✅ Automatic Jest/Mocha detection
+- ✅ Module path auto-fixing (`require('./yourFile')` → `require('./example')`)
+- ✅ Import deduplication
+- ✅ Terminal and Output Panel execution
+
+#### Python  
+- ✅ Pytest-style test generation
+- ✅ Automatic pytest detection (`python -m pytest`)
+- ✅ Import path auto-fixing (`from yourFile import` → `from example import`)
+- ✅ Test class organization
+- ✅ Works without PATH configuration
+
+#### Java
+- ✅ JUnit 5 (Jupiter) support
+- ✅ Maven project structure
+- ✅ Class and method testing
+- ✅ Exception testing with `assertThrows()`
+- 🔧 Requires JDK and Maven installation
 
 ---
 
@@ -64,6 +110,12 @@
 3. **Generate Tests**
    ```bash
    Open any code file → Ctrl+Shift+P → "Test Generator: Generate Test Cases"
+   ```
+
+4. **Run Tests** (New!)
+   ```bash
+   Click "Run Tests" button in generated tests panel
+   Choose: Terminal (real-time) or Output Panel (formatted)
    ```
 
 ### Prerequisites
