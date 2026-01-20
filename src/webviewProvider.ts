@@ -266,11 +266,12 @@ async function runTestsInTerminal(
         
         terminal.show();
         
-        // Show info message
-        vscode.window.showInformationMessage(`Running tests with ${framework}...`);
+        // Show info message with directory
+        vscode.window.showInformationMessage(`Running tests in: ${workspaceFolder.uri.fsPath}`);
         
-        // Run the test command
-        terminal.sendText(testCommand);
+        // Execute as a single command block to ensure directory context
+        const commandBlock = `cd "${workspaceFolder.uri.fsPath}"; Write-Host "Working Directory: $(Get-Location)" -ForegroundColor Green; ${testCommand}`;
+        terminal.sendText(commandBlock);
         
         // Optional: Clean up after a delay
         setTimeout(async () => {
@@ -458,16 +459,16 @@ function getTempTestFileName(language: string, framework: string): string {
  */
 function getTestCommand(language: string, framework: string, fileName: string): string | null {
     const commands: { [key: string]: string } = {
-        // JavaScript/TypeScript
-        'javascript-jest': `npx jest ${fileName}`,
+        // JavaScript/TypeScript - Use Jest with explicit config and rootDir
+        'javascript-jest': `npx jest --config=jest.config.js --rootDir=. ${fileName}`,
         'javascript-mocha': `npx mocha ${fileName}`,
         'javascript-jasmine': `npx jasmine ${fileName}`,
-        'typescript-jest': `npx jest ${fileName}`,
+        'typescript-jest': `npx jest --config=jest.config.js --rootDir=. ${fileName}`,
         'typescript-mocha': `npx ts-mocha ${fileName}`,
         'typescript-vitest': `npx vitest run ${fileName}`,
         
         // Python
-        'python-pytest': `pytest ${fileName} -v`,
+        'python-pytest': `pytest ./${fileName} -v`,
         'python-unittest': `python -m unittest ${fileName}`,
         
         // Java
@@ -475,7 +476,7 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'java-testng': `java -cp .:testng.jar org.testng.TestNG ${fileName}`,
         
         // Go
-        'go-testing': `go test ${fileName} -v`,
+        'go-testing': `go test ./${fileName} -v`,
         
         // Rust
         'rust-cargo': `cargo test --test ${fileName.replace('.rs', '')}`,
@@ -489,11 +490,11 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'csharp-xunit': `dotnet test ${fileName}`,
         
         // Ruby
-        'ruby-rspec': `rspec ${fileName}`,
-        'ruby-minitest': `ruby ${fileName}`,
+        'ruby-rspec': `rspec ./${fileName}`,
+        'ruby-minitest': `ruby ./${fileName}`,
         
         // PHP
-        'php-phpunit': `phpunit ${fileName}`
+        'php-phpunit': `phpunit ./${fileName}`
     };
     
     const key = `${language}-${framework}`;
