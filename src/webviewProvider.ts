@@ -314,13 +314,38 @@ async function fixModulePaths(testCode: string, language: string): Promise<strin
     // Get the current file name without extension
     const uri = editor.document.uri;
     const fileName = uri.path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'module';
+    const fullFileName = uri.path.split('/').pop() || 'module';
     
-    // Replace common placeholder paths with actual file name
-    let fixed = testCode
+    // Language-specific fixes
+    let fixed = testCode;
+    
+    // JavaScript/TypeScript - require() and import
+    fixed = fixed
         .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${fileName}')`)
         .replace(/require\(['"]\.\/module['"]\)/g, `require('./${fileName}')`)
+        .replace(/require\(['"]\.\/yourFile['"]\)/g, `require('./${fileName}')`)
         .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${fileName}'`)
-        .replace(/from\s+['"]\.\/module['"]/g, `from './${fileName}'`);
+        .replace(/from\s+['"]\.\/module['"]/g, `from './${fileName}'`)
+        .replace(/from\s+['"]\.\/yourFile['"]/g, `from './${fileName}'`);
+    
+    // Python - from X import Y
+    fixed = fixed
+        .replace(/from\s+your_module_name\s+import/g, `from ${fileName} import`)
+        .replace(/from\s+module\s+import/g, `from ${fileName} import`)
+        .replace(/from\s+yourFile\s+import/g, `from ${fileName} import`)
+        .replace(/import\s+your_module_name/g, `import ${fileName}`)
+        .replace(/import\s+module(?!\s*\.)/g, `import ${fileName}`)
+        .replace(/import\s+yourFile/g, `import ${fileName}`);
+    
+    // Java - import statements
+    const className = fileName.charAt(0).toUpperCase() + fileName.slice(1);
+    fixed = fixed
+        .replace(/import\s+YourClass;/g, `import ${className};`)
+        .replace(/import\s+Module;/g, `import ${className};`)
+        .replace(/new\s+YourClass\(/g, `new ${className}(`)
+        .replace(/new\s+Module\(/g, `new ${className}(`)
+        .replace(/YourClass\./g, `${className}.`)
+        .replace(/Module\./g, `${className}.`);
     
     return fixed;
 }
@@ -471,9 +496,9 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'python-pytest': `pytest ./${fileName} -v`,
         'python-unittest': `python -m unittest ${fileName}`,
         
-        // Java
-        'java-junit': `javac ${fileName} && java org.junit.runner.JUnitCore ${fileName.replace('.java', '')}`,
-        'java-testng': `java -cp .:testng.jar org.testng.TestNG ${fileName}`,
+        // Java - Using Maven
+        'java-junit': `mvn test -Dtest=${fileName.replace('.java', '')}`,
+        'java-testng': `mvn test -Dtest=${fileName.replace('.java', '')}`,
         
         // Go
         'go-testing': `go test ./${fileName} -v`,
@@ -540,6 +565,17 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
             }
         }
         
+        // Check pom.xml for Java/Maven
+        if (framework === 'junit') {
+            const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
+            try {
+                const pomContent = await vscode.workspace.fs.readFile(pomPath);
+                return pomContent.toString().includes('junit');
+            } catch {
+                return false;
+            }
+        }
+        
         // For other frameworks, assume installed
         return true;
         
@@ -560,13 +596,16 @@ async function installFramework(framework: string): Promise<void> {
         'mocha': 'npm install --save-dev mocha',
         'jasmine': 'npm install --save-dev jasmine',
         'vitest': 'npm install --save-dev vitest',
-        'pytest': 'pip install pytest'
+        'pytest': 'pip install pytest',
+        'junit': 'mvn install'
     };
     
     const command = installCommands[framework];
     if (command) {
         terminal.sendText(command);
         vscode.window.showInformationMessage(`Installing ${framework}...`);
+    } else {
+        vscode.window.showWarningMessage(`Auto-installation not available for ${framework}. Please install manually.`);
     }
 }
 

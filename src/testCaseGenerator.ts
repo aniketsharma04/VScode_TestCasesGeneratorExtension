@@ -40,16 +40,19 @@ export async function generateTests(
         return tests;
     } catch (error: any) {
         console.error('Test generation error:', error);
+        console.error('Error status:', error.status);
+        console.error('Error message:', error.message);
+        console.error('Full error:', JSON.stringify(error, null, 2));
         
         // Provide user-friendly error messages
         if (error.status === 401 || error.message?.includes('401')) {
             throw new Error('Invalid API key. Please configure your API key using the "Configure API Key" command.');
-        } else if (error.status === 429 || error.message?.includes('429')) {
-            throw new Error('API rate limit exceeded. Please try again later.');
+        } else if (error.status === 429 || error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED')) {
+            throw new Error('API rate limit exceeded. Please try again later or check your API quota.');
         } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
             throw new Error('Network error. Please check your internet connection.');
-        } else if (error.message?.includes('API key')) {
-            throw new Error('API key error: ' + error.message);
+        } else if (error.message?.includes('API key') || error.message?.includes('API_KEY_INVALID')) {
+            throw new Error('Invalid API key. Please reconfigure your API key.');
         } else {
             throw new Error(`Failed to generate tests: ${error.message || 'Unknown error'}`);
         }
@@ -120,6 +123,8 @@ async function generateWithGemini(
  * Build optimized prompt for test generation
  */
 function buildTestPrompt(code: string, language: string, framework: string): string {
+    const languageSpecificInstructions = getLanguageSpecificInstructions(language, framework);
+    
     return `You are an expert software testing engineer. Generate comprehensive, RUNNABLE unit tests for the following ${language} code.
 
 CODE TO TEST:
@@ -129,17 +134,46 @@ ${code}
 
 CRITICAL REQUIREMENTS FOR ${framework.toUpperCase()}:
 1. **Import ALL dependencies ONLY ONCE at the very top** - DO NOT repeat imports
-2. **Wrap all tests in a single describe() block**
-3. **Use correct module path** - If testing example.js, use require('./example')
+2. **${languageSpecificInstructions.wrapperRequirement}**
+3. **Use correct module path** - ${languageSpecificInstructions.importExample}
 4. **Generate 5-8 different test cases covering:**
    - Normal scenarios (2-3 tests)
    - Edge cases (boundary values, empty, null) (2-3 tests)
    - Error cases (invalid inputs, exceptions) (1-2 tests)
 5. **Each test must be independent and runnable**
 6. **Use proper ${framework} syntax and matchers**
-7. **Use nested describe blocks** for better organization
+7. **${languageSpecificInstructions.organizationTip}**
 
-EXACT STRUCTURE (JavaScript/Jest example):
+${languageSpecificInstructions.exampleCode}
+
+CRITICAL:
+- ${languageSpecificInstructions.importRule}
+- ${languageSpecificInstructions.structureRule}
+- NO explanatory text before/after code
+- COMPLETE, RUNNABLE code only
+- ${languageSpecificInstructions.matcherInfo}
+
+Generate the tests now:`;
+}
+
+/**
+ * Get language-specific instructions for test generation
+ */
+function getLanguageSpecificInstructions(language: string, framework: string): {
+    wrapperRequirement: string;
+    importExample: string;
+    organizationTip: string;
+    exampleCode: string;
+    importRule: string;
+    structureRule: string;
+    matcherInfo: string;
+} {
+    const instructions: { [key: string]: any } = {
+        'javascript': {
+            wrapperRequirement: 'Wrap all tests in a single describe() block',
+            importExample: 'If testing example.js, use require(\'./example\')',
+            organizationTip: 'Use nested describe blocks for better organization',
+            exampleCode: `EXACT STRUCTURE (Jest example):
 \`\`\`javascript
 const { add, divide, findMax } = require('./example');
 
@@ -148,43 +182,116 @@ describe('Example Functions', () => {
     test('should add two positive numbers', () => {
       expect(add(2, 3)).toBe(5);
     });
-    
-    test('should handle negative numbers', () => {
-      expect(add(-1, -2)).toBe(-3);
-    });
   });
   
   describe('divide function', () => {
-    test('should divide two numbers', () => {
-      expect(divide(6, 3)).toBe(2);
-    });
-    
     test('should throw error on division by zero', () => {
-      expect(() => divide(5, 0)).toThrow('Division by zero');
-    });
-  });
-  
-  describe('findMax function', () => {
-    test('should find maximum in array', () => {
-      expect(findMax([1, 5, 3])).toBe(5);
-    });
-    
-    test('should return null for empty array', () => {
-      expect(findMax([])).toBeNull();
+      expect(() => divide(5, 0)).toThrow();
     });
   });
 });
-\`\`\`
+\`\`\``,
+            importRule: 'ONE import/require statement at top',
+            structureRule: 'ONE main describe block wrapping everything',
+            matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow(), .toBeNull()'
+        },
+        'typescript': {
+            wrapperRequirement: 'Wrap all tests in a single describe() block',
+            importExample: 'If testing example.ts, use import { add } from \'./example\'',
+            organizationTip: 'Use nested describe blocks for better organization',
+            exampleCode: `EXACT STRUCTURE (Jest/TypeScript example):
+\`\`\`typescript
+import { add, divide, findMax } from './example';
 
-CRITICAL:
-- ONE import statement at top
-- ONE main describe block wrapping everything
-- Nested describe blocks for each function
-- NO explanatory text before/after code
-- COMPLETE, RUNNABLE code only
-- Use appropriate matchers: .toBe(), .toEqual(), .toThrow(), .toBeNull()
+describe('Example Functions', () => {
+  describe('add function', () => {
+    test('should add two positive numbers', () => {
+      expect(add(2, 3)).toBe(5);
+    });
+  });
+});
+\`\`\``,
+            importRule: 'ONE import statement at top',
+            structureRule: 'ONE main describe block wrapping everything',
+            matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow()'
+        },
+        'python': {
+            wrapperRequirement: 'Wrap all tests in a test class or use separate test functions',
+            importExample: 'If testing example.py, use from example import add, divide',
+            organizationTip: 'Group related tests in test classes',
+            exampleCode: `EXACT STRUCTURE (Pytest example):
+\`\`\`python
+from example import add, divide, find_max
+import pytest
 
-Generate the tests now:`;
+class TestCalculator:
+    def test_add_positive_numbers(self):
+        assert add(2, 3) == 5
+    
+    def test_add_negative_numbers(self):
+        assert add(-1, -2) == -3
+    
+    def test_divide_normal(self):
+        assert divide(6, 3) == 2
+    
+    def test_divide_by_zero_raises_error(self):
+        with pytest.raises(ValueError):
+            divide(5, 0)
+    
+    def test_find_max_normal(self):
+        assert find_max([1, 5, 3]) == 5
+\`\`\``,
+            importRule: 'ONE import statement at top: from module import functions',
+            structureRule: 'Use test class or separate test functions with test_ prefix',
+            matcherInfo: 'Use assert statements and pytest.raises() for exceptions'
+        },
+        'java': {
+            wrapperRequirement: 'Create a test class with @Test methods (JUnit 5)',
+            importExample: 'If testing Calculator.java, import com.testcase.Calculator',
+            organizationTip: 'Use @Test annotation for each test method',
+            exampleCode: `EXACT STRUCTURE (JUnit 5 example):
+\`\`\`java
+package com.testcase;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class CalculatorTest {
+    @Test
+    public void testAdd() {
+        assertEquals(5, Calculator.add(2, 3));
+    }
+    
+    @Test
+    public void testAddNegative() {
+        assertEquals(-3, Calculator.add(-1, -2));
+    }
+    
+    @Test
+    public void testDivide() {
+        assertEquals(2.0, Calculator.divide(6, 3), 0.001);
+    }
+    
+    @Test
+    public void testDivideByZeroThrowsException() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            Calculator.divide(5, 0);
+        });
+    }
+    
+    @Test
+    public void testFindMax() {
+        assertEquals(5, Calculator.findMax(new int[]{1, 5, 3}));
+    }
+}
+\`\`\``,
+            importRule: 'Import JUnit 5 classes (org.junit.jupiter.api.*) and class under test',
+            structureRule: 'Create test class with @Test methods, use assertThrows() for exceptions',
+            matcherInfo: 'Use assertEquals(), assertTrue(), assertFalse(), assertThrows(), assertNull()'
+        }
+    };
+    
+    return instructions[language] || instructions['javascript'];
 }
 
 /**
@@ -240,6 +347,56 @@ function cleanGeneratedTests(rawCode: string, language: string): string {
                 ].join('\n');
             }
         }
+    } else if (language === 'python') {
+        // Fix duplicate imports for Python
+        const lines = cleaned.split('\n');
+        const imports = new Set<string>();
+        const importLines: string[] = [];
+        const codeLines: string[] = [];
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            // Check if it's an import line
+            if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+                const normalized = trimmed.replace(/\s+/g, ' ');
+                
+                if (!imports.has(normalized)) {
+                    imports.add(normalized);
+                    importLines.push(line);
+                }
+            } else if (trimmed) {
+                codeLines.push(line);
+            }
+        }
+        
+        // Reconstruct: imports first, then other code
+        cleaned = [...importLines, '', ...codeLines].join('\n');
+    } else if (language === 'java') {
+        // Fix duplicate imports for Java
+        const lines = cleaned.split('\n');
+        const imports = new Set<string>();
+        const importLines: string[] = [];
+        const codeLines: string[] = [];
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            
+            // Check if it's an import line
+            if (trimmed.startsWith('import ')) {
+                const normalized = trimmed.replace(/\s+/g, ' ');
+                
+                if (!imports.has(normalized)) {
+                    imports.add(normalized);
+                    importLines.push(line);
+                }
+            } else if (trimmed) {
+                codeLines.push(line);
+            }
+        }
+        
+        // Reconstruct: imports first, then other code
+        cleaned = [...importLines, '', ...codeLines].join('\n');
     }
     
     return cleaned;
