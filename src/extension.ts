@@ -135,7 +135,7 @@ async function handleGenerateTests(context: vscode.ExtensionContext) {
                     progress.report({ increment: 60, message: 'Processing results...' });
 
                     // 8. Show results in WebView panel
-                    createTestCasePanel(context, tests);
+                    createTestCasePanel(context, tests, code, config);
 
                     progress.report({ increment: 100, message: 'Done!' });
 
@@ -219,7 +219,7 @@ async function handleGenerateFromSelection(context: vscode.ExtensionContext) {
                 progress.report({ increment: 30 });
                 const tests = await generateTests(code, language as SupportedLanguage, config);
                 progress.report({ increment: 60 });
-                createTestCasePanel(context, tests);
+                createTestCasePanel(context, tests, code, config);
                 progress.report({ increment: 100 });
                 vscode.window.showInformationMessage(`✅ Generated ${tests.testCases.length} test cases!`);
             }

@@ -22,6 +22,12 @@
             });
         }
         
+        // Generate More button
+        const generateMoreBtn = document.getElementById('generateMore');
+        if (generateMoreBtn) {
+            generateMoreBtn.addEventListener('click', () => generateMore());
+        }
+        
         // Save File button
         const saveFileBtn = document.getElementById('saveFile');
         if (saveFileBtn) {
@@ -130,6 +136,16 @@
         }
         
         return 'javascript'; // Default fallback
+    }
+    
+    /**
+     * Generate more tests using existing tests as context
+     */
+    function generateMore() {
+        vscode.postMessage({
+            command: 'generateMore',
+            existingTests: testData.testCases
+        });
     }
     
     /**

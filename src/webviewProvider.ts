@@ -10,12 +10,22 @@ import type { GeneratedTests } from './types';
 const execAsync = promisify(exec);
 let outputChannel: vscode.OutputChannel | null = null;
 
+// Store current context for "Generate More" functionality
+interface PanelContext {
+    code: string;
+    language: string;
+    config: any;
+}
+const panelContexts = new Map<string, PanelContext>();
+
 /**
  * Create and show WebView panel
  */
 export function createTestCasePanel(
     context: vscode.ExtensionContext,
-    tests: GeneratedTests
+    tests: GeneratedTests,
+    code?: string,
+    config?: any
 ): vscode.WebviewPanel {
     // Create panel
     const panel = vscode.window.createWebviewPanel(
@@ -30,6 +40,20 @@ export function createTestCasePanel(
             ]
         }
     );
+    
+    // Store panel context if provided
+    if (code && config) {
+        panelContexts.set(panel.title, {
+            code,
+            language: tests.language,
+            config
+        });
+    }
+    
+    // Clean up context when panel is disposed
+    panel.onDidDispose(() => {
+        panelContexts.delete(panel.title);
+    });
 
     // Set HTML content
     panel.webview.html = getWebviewContent(panel.webview, tests, context);
@@ -82,6 +106,7 @@ function getWebviewContent(
                 <span class="badge badge-language">${escapeHtml(tests.language)}</span>
                 <span class="badge badge-framework">${escapeHtml(tests.framework)}</span>
                 <span class="badge">Total: ${tests.testCases.length} tests</span>
+                ${tests.metadata ? `<span class="badge badge-success">✓ ${tests.metadata.uniqueTests} unique (${tests.metadata.duplicatesRemoved} duplicates removed)</span>` : ''}
             </div>
         </header>
 
@@ -105,6 +130,9 @@ function getWebviewContent(
         <div class="actions">
             <button id="copyAll" class="btn btn-primary">
                 <span class="icon">📋</span> Copy All Tests
+            </button>
+            <button id="generateMore" class="btn btn-accent">
+                <span class="icon">➕</span> Generate More (12 Tests)
             </button>
             <button id="saveFile" class="btn btn-secondary">
                 <span class="icon">💾</span> Save to File
@@ -179,10 +207,84 @@ async function handleWebviewMessage(
                 message.framework
             );
             break;
+        
+        case 'generateMore':
+            await handleGenerateMore(message, panel, tests, context);
+            break;
 
         case 'error':
             vscode.window.showErrorMessage(message.text);
             break;
+    }
+}
+
+/**
+ * Handle "Generate More" tests request
+ */
+async function handleGenerateMore(
+    message: any,
+    panel: vscode.WebviewPanel,
+    currentTests: GeneratedTests,
+    context: vscode.ExtensionContext
+): Promise<void> {
+    try {
+        // Get stored context
+        const panelContext = panelContexts.get(panel.title);
+        if (!panelContext) {
+            vscode.window.showErrorMessage('Cannot generate more tests: context not found. Please regenerate tests from source code.');
+            return;
+        }
+        
+        // Import generateTests function
+        const { generateTests } = await import('./testCaseGenerator');
+        
+        // Show progress
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'Generating 12 more test cases...',
+                cancellable: false
+            },
+            async (progress) => {
+                progress.report({ increment: 0, message: 'Analyzing existing tests...' });
+                
+                // Generate more tests with existing tests as context
+                const existingTests = message.existingTests || currentTests.testCases;
+                progress.report({ increment: 30, message: `Calling AI...` });
+                
+                const newTests = await generateTests(
+                    panelContext.code,
+                    panelContext.language as any,
+                    panelContext.config,
+                    currentTests.framework,
+                    existingTests
+                );
+                
+                progress.report({ increment: 70, message: 'Merging tests...' });
+                
+                // Merge new tests with existing ones
+                const mergedTests: GeneratedTests = {
+                    ...currentTests,
+                    testCases: [...currentTests.testCases, ...newTests.testCases],
+                    fullCode: newTests.fullCode, // Use new full code
+                    timestamp: Date.now()
+                };
+                
+                // Update the panel with merged tests
+                panel.webview.html = getWebviewContent(panel.webview, mergedTests, context);
+                
+                progress.report({ increment: 100, message: 'Done!' });
+                
+                // Show success message with stats
+                const statsMessage = newTests.metadata 
+                    ? `✅ Generated ${newTests.metadata.uniqueTests} new tests (${newTests.metadata.duplicatesRemoved} duplicates removed). Total: ${mergedTests.testCases.length} tests`
+                    : `✅ Generated ${newTests.testCases.length} new tests. Total: ${mergedTests.testCases.length} tests`;
+                
+                vscode.window.showInformationMessage(statsMessage);
+            }
+        );
+    } catch (error: any) {
+        vscode.window.showErrorMessage(`Failed to generate more tests: ${error.message}`);
     }
 }
 
@@ -590,11 +692,30 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
         
         // Check pom.xml for Java/Maven
         if (framework === 'junit') {
-            const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
+            console.log('[Framework Check] Checking JUnit/Maven installation...');
+            
+            // First check if Maven is installed
             try {
-                const pomContent = await vscode.workspace.fs.readFile(pomPath);
-                return pomContent.toString().includes('junit');
-            } catch {
+                const { exec } = require('child_process');
+                const { promisify } = require('util');
+                const execAsync = promisify(exec);
+                
+                await execAsync('mvn -version');
+                console.log('[Framework Check] Maven is installed ✓');
+                
+                // Now check if pom.xml exists with JUnit
+                const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
+                try {
+                    const pomContent = await vscode.workspace.fs.readFile(pomPath);
+                    const hasJunit = pomContent.toString().includes('junit');
+                    console.log('[Framework Check] JUnit in pom.xml:', hasJunit);
+                    return hasJunit;
+                } catch {
+                    console.log('[Framework Check] No pom.xml found');
+                    return false;
+                }
+            } catch (error: any) {
+                console.log('[Framework Check] Maven not installed:', error.message);
                 return false;
             }
         }
@@ -611,6 +732,41 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
  * Install testing framework
  */
 async function installFramework(framework: string): Promise<void> {
+    // Special handling for JUnit - check Maven first
+    if (framework === 'junit') {
+        try {
+            const { exec } = require('child_process');
+            const { promisify } = require('util');
+            const execAsync = promisify(exec);
+            
+            await execAsync('mvn -version');
+            // Maven is installed, proceed with installation
+            const terminal = vscode.window.createTerminal('Install JUnit');
+            terminal.show();
+            terminal.sendText('mvn clean install');
+            vscode.window.showInformationMessage('Installing JUnit dependencies...');
+        } catch {
+            // Maven not installed
+            const action = await vscode.window.showErrorMessage(
+                'Maven is not installed. Java testing requires JDK 11+ and Maven.',
+                'View Setup Guide',
+                'Cancel'
+            );
+            
+            if (action === 'View Setup Guide') {
+                const setupDoc = vscode.Uri.file(vscode.workspace.workspaceFolders?.[0].uri.fsPath + '/javasetup.md');
+                try {
+                    const doc = await vscode.workspace.openTextDocument(setupDoc);
+                    await vscode.window.showTextDocument(doc);
+                } catch {
+                    vscode.window.showWarningMessage('Setup guide not found. Please install JDK 11+ and Maven manually.');
+                }
+            }
+        }
+        return;
+    }
+    
+    // For other frameworks
     const terminal = vscode.window.createTerminal('Install Test Framework');
     terminal.show();
     
@@ -619,8 +775,7 @@ async function installFramework(framework: string): Promise<void> {
         'mocha': 'npm install --save-dev mocha',
         'jasmine': 'npm install --save-dev jasmine',
         'vitest': 'npm install --save-dev vitest',
-        'pytest': 'pip install pytest',
-        'junit': 'mvn install'
+        'pytest': 'pip install pytest'
     };
     
     const command = installCommands[framework];

@@ -6,6 +6,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { ExtensionConfig, GeneratedTests, SupportedLanguage, TestCase } from './types';
 
+// Configuration constants
+const TESTS_PER_GENERATION = 12; // Number of tests to generate per request
+
 /**
  * Main function to generate tests using configured AI provider
  */
@@ -13,7 +16,8 @@ export async function generateTests(
     code: string,
     language: SupportedLanguage,
     config: ExtensionConfig,
-    framework?: string
+    framework?: string,
+    existingTests?: TestCase[]
 ): Promise<GeneratedTests> {
     // Determine framework if not provided
     const testFramework = framework || getDefaultFramework(language);
@@ -23,13 +27,21 @@ export async function generateTests(
     try {
         // Generate tests based on provider
         if (config.apiProvider === 'anthropic') {
-            aiResponse = await generateWithClaude(code, language, testFramework, config);
+            aiResponse = await generateWithClaude(code, language, testFramework, config, existingTests);
         } else {
-            aiResponse = await generateWithGemini(code, language, testFramework, config);
+            aiResponse = await generateWithGemini(code, language, testFramework, config, existingTests);
         }
         
         // Parse the response
         const tests = parseTestCases(aiResponse, language, testFramework);
+        
+        // Deduplicate if existing tests provided
+        let duplicateCount = 0;
+        if (existingTests && existingTests.length > 0) {
+            const deduplicationResult = deduplicateTests(tests.testCases, existingTests);
+            tests.testCases = deduplicationResult.uniqueTests;
+            duplicateCount = deduplicationResult.duplicateCount;
+        }
         
         // Validate generated tests
         const validation = validateGeneratedTests(tests);
@@ -37,7 +49,15 @@ export async function generateTests(
             console.warn('Generated tests have issues:', validation.issues);
         }
         
-        return tests;
+        // Add metadata about generation
+        return {
+            ...tests,
+            metadata: {
+                duplicatesRemoved: duplicateCount,
+                totalGenerated: tests.testCases.length + duplicateCount,
+                uniqueTests: tests.testCases.length
+            }
+        };
     } catch (error: any) {
         console.error('Test generation error:', error);
         console.error('Error status:', error.status);
@@ -68,13 +88,14 @@ async function generateWithClaude(
     code: string,
     language: string,
     framework: string,
-    config: ExtensionConfig
+    config: ExtensionConfig,
+    existingTests?: TestCase[]
 ): Promise<string> {
     const anthropic = new Anthropic({
         apiKey: config.apiKey
     });
     
-    const prompt = buildTestPrompt(code, language, framework);
+    const prompt = buildTestPrompt(code, language, framework, existingTests);
     
     const message = await anthropic.messages.create({
         model: config.model || 'claude-sonnet-4-20250514',
@@ -104,7 +125,8 @@ async function generateWithGemini(
     code: string,
     language: string,
     framework: string,
-    config: ExtensionConfig
+    config: ExtensionConfig,
+    existingTests?: TestCase[]
 ): Promise<string> {
     const genAI = new GoogleGenerativeAI(config.apiKey);
     const model = genAI.getGenerativeModel({
@@ -115,7 +137,7 @@ async function generateWithGemini(
         }
     });
     
-    const prompt = buildTestPrompt(code, language, framework);
+    const prompt = buildTestPrompt(code, language, framework, existingTests);
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
@@ -124,38 +146,66 @@ async function generateWithGemini(
 /**
  * Build optimized prompt for test generation
  */
-function buildTestPrompt(code: string, language: string, framework: string): string {
+function buildTestPrompt(
+    code: string, 
+    language: string, 
+    framework: string, 
+    existingTests?: TestCase[]
+): string {
     const languageSpecificInstructions = getLanguageSpecificInstructions(language, framework);
     
-    return `You are an expert software testing engineer. Generate comprehensive, RUNNABLE unit tests for the following ${language} code.
+    // Build existing tests context
+    let existingTestsContext = '';
+    if (existingTests && existingTests.length > 0) {
+        const testDescriptions = existingTests.map(t => 
+            `- ${t.name}: tests specific functionality`
+        ).join('\n');
+        
+        existingTestsContext = `\n\nEXISTING TESTS (DO NOT DUPLICATE):
+The following ${existingTests.length} tests already exist. Generate DIFFERENT tests with UNIQUE scenarios:
+${testDescriptions}
+
+Generate ${TESTS_PER_GENERATION} NEW and DIVERSE tests that cover aspects NOT covered by existing tests above.
+`;
+    } else {
+        existingTestsContext = `\n\nGenerate EXACTLY ${TESTS_PER_GENERATION} diverse and comprehensive tests.`;
+    }
+    
+    return `You are an expert software testing engineer. Generate EXACTLY ${TESTS_PER_GENERATION} comprehensive, RUNNABLE unit tests for the following ${language} code.
 
 CODE TO TEST:
 \`\`\`${language}
 ${code}
 \`\`\`
+${existingTestsContext}
+
+⚠️ STRICT REQUIREMENT: You MUST generate EXACTLY ${TESTS_PER_GENERATION} tests - NOT ${TESTS_PER_GENERATION - 1}, NOT ${TESTS_PER_GENERATION + 1}, EXACTLY ${TESTS_PER_GENERATION} tests.
 
 CRITICAL REQUIREMENTS FOR ${framework.toUpperCase()}:
 1. **Import ALL dependencies ONLY ONCE at the very top** - DO NOT repeat imports
 2. **${languageSpecificInstructions.wrapperRequirement}**
 3. **Use correct module path** - ${languageSpecificInstructions.importExample}
-4. **Generate 5-8 different test cases covering:**
-   - Normal scenarios (2-3 tests)
-   - Edge cases (boundary values, empty, null) (2-3 tests)
-   - Error cases (invalid inputs, exceptions) (1-2 tests)
+4. **Generate EXACTLY ${TESTS_PER_GENERATION} test cases covering:**
+   - Normal scenarios (~5 tests): typical valid inputs and expected outputs
+   - Edge cases (~5 tests): boundary values, empty inputs, null/undefined, large values
+   - Error cases (~2 tests): invalid inputs, exceptions, error handling
 5. **Each test must be independent and runnable**
 6. **Use proper ${framework} syntax and matchers**
 7. **${languageSpecificInstructions.organizationTip}**
 
 ${languageSpecificInstructions.exampleCode}
 
-CRITICAL:
+CRITICAL - READ CAREFULLY:
 - ${languageSpecificInstructions.importRule}
 - ${languageSpecificInstructions.structureRule}
 - NO explanatory text before/after code
 - COMPLETE, RUNNABLE code only
 - ${languageSpecificInstructions.matcherInfo}
+- ⚠️ EXACTLY ${TESTS_PER_GENERATION} TESTS - COUNT THEM BEFORE RESPONDING
+- If you generate ${TESTS_PER_GENERATION - 1} tests, ADD ONE MORE
+- If you generate ${TESTS_PER_GENERATION + 1} tests, REMOVE ONE
 
-Generate the tests now:`;
+Generate EXACTLY ${TESTS_PER_GENERATION} tests now:`;
 }
 
 /**
@@ -646,6 +696,131 @@ function determineTestType(testName: string): 'normal' | 'edge' | 'error' {
  */
 function generateId(): string {
     return `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Deduplicate test cases by comparing with existing tests
+ * Returns unique tests and count of duplicates removed
+ */
+export function deduplicateTests(
+    newTests: TestCase[],
+    existingTests: TestCase[]
+): { uniqueTests: TestCase[]; duplicateCount: number } {
+    if (!existingTests || existingTests.length === 0) {
+        return { uniqueTests: newTests, duplicateCount: 0 };
+    }
+    
+    const uniqueTests: TestCase[] = [];
+    let duplicateCount = 0;
+    
+    // Build existing test signatures for comparison
+    const existingSignatures = new Set(
+        existingTests.map(t => normalizeTestSignature(t))
+    );
+    
+    for (const newTest of newTests) {
+        const newSignature = normalizeTestSignature(newTest);
+        
+        // Check for exact match
+        if (existingSignatures.has(newSignature)) {
+            duplicateCount++;
+            continue;
+        }
+        
+        // Check for similar tests using fuzzy matching
+        let isDuplicate = false;
+        for (const existingTest of existingTests) {
+            if (isSimilarTest(newTest, existingTest)) {
+                duplicateCount++;
+                isDuplicate = true;
+                break;
+            }
+        }
+        
+        if (!isDuplicate) {
+            uniqueTests.push(newTest);
+            existingSignatures.add(newSignature);
+        }
+    }
+    
+    return { uniqueTests, duplicateCount };
+}
+
+/**
+ * Normalize test signature for comparison
+ */
+function normalizeTestSignature(test: TestCase): string {
+    const name = (test.name || '').toLowerCase().trim();
+    return name;
+}
+
+/**
+ * Check if two tests are similar using fuzzy matching
+ */
+function isSimilarTest(test1: TestCase, test2: TestCase): boolean {
+    const name1 = (test1.name || '').toLowerCase().replace(/[_\s-]/g, '');
+    const name2 = (test2.name || '').toLowerCase().replace(/[_\s-]/g, '');
+    
+    // Exact name match (after normalization)
+    if (name1 === name2 && name1.length > 0) {
+        return true;
+    }
+    
+    // Check if names are very similar (>80% similarity)
+    const similarity = calculateStringSimilarity(name1, name2);
+    if (similarity > 0.8) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Calculate string similarity using Levenshtein distance
+ * Returns value between 0 (completely different) and 1 (identical)
+ */
+function calculateStringSimilarity(str1: string, str2: string): number {
+    if (str1 === str2) return 1.0;
+    if (str1.length === 0 || str2.length === 0) return 0.0;
+    
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 1.0;
+    
+    const editDistance = levenshteinDistance(longer, shorter);
+    return (longer.length - editDistance) / longer.length;
+}
+
+/**
+ * Calculate Levenshtein distance between two strings
+ */
+function levenshteinDistance(str1: string, str2: string): number {
+    const matrix: number[][] = [];
+    
+    for (let i = 0; i <= str2.length; i++) {
+        matrix[i] = [i];
+    }
+    
+    for (let j = 0; j <= str1.length; j++) {
+        matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= str2.length; i++) {
+        for (let j = 1; j <= str1.length; j++) {
+            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1, // substitution
+                    matrix[i][j - 1] + 1,     // insertion
+                    matrix[i - 1][j] + 1      // deletion
+                );
+            }
+        }
+    }
+    
+    return matrix[str2.length][str1.length];
 }
 
 /**
