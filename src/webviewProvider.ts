@@ -236,7 +236,7 @@ async function handleGenerateMore(
         }
         
         // Import generateTests function
-        const { generateTests } = await import('./testCaseGenerator');
+        const { generateTests } = await import('./testCaseGenerator.js');
         
         // Show progress
         await vscode.window.withProgress(
