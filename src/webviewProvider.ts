@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import type { GeneratedTests } from './types';
+import type { GeneratedTests, TestCase } from './types';
 import { generateTests } from './testCaseGenerator';
 
 const execAsync = promisify(exec);
@@ -16,6 +16,7 @@ interface PanelContext {
     code: string;
     language: string;
     config: any;
+    allHistoricalTests: TestCase[];  // Track all tests ever generated for deduplication
 }
 const panelContexts = new Map<string, PanelContext>();
 
@@ -47,7 +48,8 @@ export function createTestCasePanel(
         panelContexts.set(panel.title, {
             code,
             language: tests.language,
-            config
+            config,
+            allHistoricalTests: [...tests.testCases]  // Initialize with first batch
         });
     }
     
@@ -245,8 +247,8 @@ async function handleGenerateMore(
             async (progress) => {
                 progress.report({ increment: 0, message: 'Analyzing existing tests...' });
                 
-                // Generate more tests with existing tests as context
-                const existingTests = message.existingTests || currentTests.testCases;
+                // Use ALL historical tests for deduplication (not just visible ones)
+                const allHistoricalTests = panelContext.allHistoricalTests;
                 progress.report({ increment: 30, message: `Calling AI...` });
                 
                 const newTests = await generateTests(
@@ -254,27 +256,31 @@ async function handleGenerateMore(
                     panelContext.language as any,
                     panelContext.config,
                     currentTests.framework,
-                    existingTests
+                    allHistoricalTests  // Pass all historical tests
                 );
                 
-                progress.report({ increment: 70, message: 'Merging tests...' });
+                progress.report({ increment: 70, message: 'Preparing new tests...' });
                 
-                // Merge new tests with existing ones
-                const mergedTests: GeneratedTests = {
+                // Replace with new tests (don't merge, only show latest 12)
+                const replacedTests: GeneratedTests = {
                     ...currentTests,
-                    testCases: [...currentTests.testCases, ...newTests.testCases],
-                    fullCode: newTests.fullCode, // Use new full code
+                    testCases: newTests.testCases,  // REPLACE: Only show new 12 tests
+                    fullCode: newTests.fullCode,
                     timestamp: Date.now()
                 };
                 
-                // Update the panel with merged tests
-                panel.webview.html = getWebviewContent(panel.webview, mergedTests, context);
+                // Update historical tests in context (add new tests to history)
+                panelContext.allHistoricalTests = [...allHistoricalTests, ...newTests.testCases];
+                panelContexts.set(panel.title, panelContext);
+                
+                // Update the panel with only new tests
+                panel.webview.html = getWebviewContent(panel.webview, replacedTests, context);
                 
                 progress.report({ increment: 100, message: 'Done!' });
                 
-                // Show success message (hide internal stats)
+                // Show success message (simple, no cumulative count)
                 vscode.window.showInformationMessage(
-                    `✅ Generated 12 more tests. Total: ${mergedTests.testCases.length} tests`
+                    `✅ Generated 12 new tests`
                 );
             }
         );

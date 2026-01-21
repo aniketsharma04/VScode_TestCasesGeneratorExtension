@@ -31,7 +31,7 @@
 - ✨ **Automatic Test Generation**: Generate exactly 12 comprehensive test cases with one command
 - 🎯 **Multi-Language Support**: JavaScript, TypeScript, Python, Java (with more coming soon)
 - 🧪 **Comprehensive Coverage**: Normal cases, edge cases, and error handling tests
-- ➕ **Generate More Tests**: Click to generate 12 additional tests with intelligent diversity (24, 36, 48...)
+- ➕ **Generate More Tests**: Click to replace with 12 new unique tests (clean interface, smart history tracking)
 - 🎯 **Smart Generation**: Ensures unique and diverse test coverage with automatic optimization
 - ▶️ **Run Tests Directly**: Execute generated tests in terminal or output panel
 - 🔧 **Auto Framework Detection**: Detects and installs Jest, Pytest, JUnit automatically

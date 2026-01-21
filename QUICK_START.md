@@ -61,10 +61,10 @@ Once tests are generated, you can:
 
 Need more test coverage?
 1. Click the **"➕ Generate More (12 Tests)"** button
-2. Extension generates 12 additional tests with smart optimization
-3. System ensures diverse and unique test patterns
-4. Repeat to build comprehensive test suites (24, 36, 48...)
-5. Each batch maintains high quality and coverage
+2. Extension generates 12 new tests and replaces the display
+3. Panel always shows the latest 12 tests (keeps interface clean)
+4. System tracks all historical tests in background for deduplication
+5. Each generation delivers unique, diverse test patterns
 
 ## 📝 Testing with Example File
 
@@ -74,7 +74,7 @@ Need more test coverage?
    - ✅ Normal cases (~5 tests): basic functionality
    - ⚠️ Edge cases (~5 tests): empty arrays, null values, boundaries
    - ❌ Error cases (~2 tests): division by zero, invalid inputs
-4. Click "Generate More" to add 12 more unique tests
+4. Click "Generate More" to replace with 12 new unique tests
 
 ## 🔧 Configuration Settings
 
@@ -148,9 +148,9 @@ The AI generates **exactly 12 tests per batch**:
 
 **Option 1: Generate More Tests**
 1. Click "➕ Generate More (12 Tests)" button
-2. Each click adds 12 new unique tests
-3. Build up to 48+ tests systematically
-4. Deduplication ensures quality
+2. Display replaces with 12 new unique tests
+3. All previous tests tracked for deduplication
+4. Keeps interface clean while maintaining quality
 
 **Option 2: Regenerate from Scratch**
 1. Run the command again (each generation is unique)
