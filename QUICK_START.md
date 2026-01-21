@@ -53,17 +53,28 @@ In the Extension Development Host window:
 Once tests are generated, you can:
 - **Copy All** - Click "📋 Copy All Tests" button
 - **Copy Individual** - Click "Copy" on any specific test
+- **Generate More** - Click "➕ Generate More (12 Tests)" to add 12 unique tests
 - **Save to File** - Click "💾 Save to File" and choose location
-- **Run Tests** - Click "▶️ Run Tests" (if npm test is configured)
+- **Run Tests** - Click "▶️ Run Tests" to execute tests
+
+### 6. Generating Additional Tests
+
+Need more test coverage?
+1. Click the **"➕ Generate More (12 Tests)"** button
+2. Extension generates 12 new unique tests
+3. Automatic deduplication removes similar tests
+4. See statistics: "✓ 10 unique (2 duplicates removed)"
+5. Repeat to build comprehensive test suites (24, 36, 48...)
 
 ## 📝 Testing with Example File
 
 1. The project includes `example.js` with sample functions
 2. Open it and run the extension
-3. You should see tests generated for:
-   - ✅ Normal cases (basic functionality)
-   - ⚠️ Edge cases (empty arrays, null values)
-   - ❌ Error cases (division by zero, invalid inputs)
+3. You should see **exactly 12 tests** generated for:
+   - ✅ Normal cases (~5 tests): basic functionality
+   - ⚠️ Edge cases (~5 tests): empty arrays, null values, boundaries
+   - ❌ Error cases (~2 tests): division by zero, invalid inputs
+4. Click "Generate More" to add 12 more unique tests
 
 ## 🔧 Configuration Settings
 
@@ -122,14 +133,26 @@ describe('Math Functions', () => {
 
 ## 🎯 Test Coverage
 
-The AI generates:
-- ✅ **Normal Tests**: Basic functionality
-- ⚠️ **Edge Cases**: Boundaries, empty inputs, null values
-- ❌ **Error Tests**: Exceptions, invalid inputs
+The AI generates **exactly 12 tests per batch**:
+- ✅ **Normal Tests** (~5): Basic functionality with typical inputs
+- ⚠️ **Edge Cases** (~5): Boundaries, empty inputs, null values, large numbers
+- ❌ **Error Tests** (~2): Exceptions, invalid inputs, error handling
 
-## 🔄 Regenerating Tests
+### Deduplication System
+- 🎯 **Context-Aware**: AI knows about existing tests
+- 🧹 **Smart Filtering**: Removes duplicates using fuzzy matching (>80% similarity)
+- 📊 **Statistics**: Badge shows "✓ X unique (Y duplicates removed)"
+- 🎲 **Systematic**: Predictable batches (12→24→36→48) for comprehensive coverage
 
-If you're not satisfied with the results:
+## 🔄 Expanding Test Coverage
+
+**Option 1: Generate More Tests**
+1. Click "➕ Generate More (12 Tests)" button
+2. Each click adds 12 new unique tests
+3. Build up to 48+ tests systematically
+4. Deduplication ensures quality
+
+**Option 2: Regenerate from Scratch**
 1. Run the command again (each generation is unique)
 2. Adjust the temperature setting (higher = more creative)
 3. Try selecting specific code sections

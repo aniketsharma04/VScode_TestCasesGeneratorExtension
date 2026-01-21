@@ -28,14 +28,16 @@
 ## ✨ Features
 
 ### Core Capabilities
-- ✨ **Automatic Test Generation**: Generate complete, runnable test cases with one command
+- ✨ **Automatic Test Generation**: Generate exactly 12 comprehensive test cases with one command
 - 🎯 **Multi-Language Support**: JavaScript, TypeScript, Python, Java (with more coming soon)
 - 🧪 **Comprehensive Coverage**: Normal cases, edge cases, and error handling tests
+- ➕ **Generate More Tests**: Click to generate 12 additional unique tests (24, 36, 48...)
+- 🎯 **Smart Deduplication**: Automatic duplicate detection using fuzzy matching (>80% similarity)
 - ▶️ **Run Tests Directly**: Execute generated tests in terminal or output panel
 - 🔧 **Auto Framework Detection**: Detects and installs Jest, Pytest, JUnit automatically
 - 📋 **Easy Copy**: Copy all tests or individual test cases with one click
 - 💾 **Save to File**: Save generated tests directly to a file
-- 🎨 **Beautiful UI**: Modern, VS Code-themed interface
+- 🎨 **Beautiful UI**: Modern, VS Code-themed interface with statistics
 - ⚡ **AI-Powered**: Uses Claude Sonnet 4 or Gemini 2.5 Flash for intelligent test generation
 
 ### Technical Features
@@ -47,6 +49,9 @@
 - 🔄 **Real-time Processing**: Progress indicators and streaming responses
 - 🎨 **Custom WebView**: Rich UI with syntax highlighting and interactive controls
 - 🚀 **Framework Auto-Installation**: Prompts to install missing test frameworks
+- 🎲 **Predefined Batches**: Consistent 12-test generation for systematic coverage
+- 🧹 **Duplicate Prevention**: Context-aware generation + Levenshtein distance matching
+- 📈 **Statistics Display**: Shows unique tests and duplicates removed
 
 ---
 
