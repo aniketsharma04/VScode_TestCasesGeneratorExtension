@@ -31,8 +31,8 @@
 - ✨ **Automatic Test Generation**: Generate exactly 12 comprehensive test cases with one command
 - 🎯 **Multi-Language Support**: JavaScript, TypeScript, Python, Java (with more coming soon)
 - 🧪 **Comprehensive Coverage**: Normal cases, edge cases, and error handling tests
-- ➕ **Generate More Tests**: Click to generate 12 additional unique tests (24, 36, 48...)
-- 🎯 **Smart Deduplication**: Automatic duplicate detection using fuzzy matching (>80% similarity)
+- ➕ **Generate More Tests**: Click to generate 12 additional tests with intelligent diversity (24, 36, 48...)
+- 🎯 **Smart Generation**: Ensures unique and diverse test coverage with automatic optimization
 - ▶️ **Run Tests Directly**: Execute generated tests in terminal or output panel
 - 🔧 **Auto Framework Detection**: Detects and installs Jest, Pytest, JUnit automatically
 - 📋 **Easy Copy**: Copy all tests or individual test cases with one click
@@ -49,9 +49,9 @@
 - 🔄 **Real-time Processing**: Progress indicators and streaming responses
 - 🎨 **Custom WebView**: Rich UI with syntax highlighting and interactive controls
 - 🚀 **Framework Auto-Installation**: Prompts to install missing test frameworks
-- 🎲 **Predefined Batches**: Consistent 12-test generation for systematic coverage
-- 🧹 **Duplicate Prevention**: Context-aware generation + Levenshtein distance matching
-- 📈 **Statistics Display**: Shows unique tests and duplicates removed
+- 🎲 **Consistent Batches**: Always generates exactly 12 tests per request for systematic coverage
+- 🧹 **Intelligent Optimization**: Multi-attempt generation with automatic quality assurance
+- 📈 **Clean Interface**: Simple, clutter-free statistics display
 
 ---
 

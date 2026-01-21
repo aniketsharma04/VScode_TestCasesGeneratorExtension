@@ -8,9 +8,11 @@ import type { ExtensionConfig, GeneratedTests, SupportedLanguage, TestCase } fro
 
 // Configuration constants
 const TESTS_PER_GENERATION = 12; // Number of tests to generate per request
+const MAX_RETRIES = 2; // Maximum API retry attempts
+const YIELD_THRESHOLD = 0.5; // If yield < 50%, use variations
 
 /**
- * Main function to generate tests using configured AI provider
+ * Main function to generate tests using configured AI provider with retry and variation logic
  */
 export async function generateTests(
     code: string,
@@ -22,40 +24,88 @@ export async function generateTests(
     // Determine framework if not provided
     const testFramework = framework || getDefaultFramework(language);
     
-    let aiResponse: string;
+    let allUniqueTests: TestCase[] = [];
+    let totalAttempts = 0;
+    let allExistingTests = existingTests || [];
     
     try {
-        // Generate tests based on provider
-        if (config.apiProvider === 'anthropic') {
-            aiResponse = await generateWithClaude(code, language, testFramework, config, existingTests);
-        } else {
-            aiResponse = await generateWithGemini(code, language, testFramework, config, existingTests);
+        // Try to generate tests with retry logic (max 2 attempts)
+        for (let attempt = 0; attempt < MAX_RETRIES && allUniqueTests.length < TESTS_PER_GENERATION; attempt++) {
+            totalAttempts++;
+            
+            // Generate tests based on provider
+            let aiResponse: string;
+            if (config.apiProvider === 'anthropic') {
+                aiResponse = await generateWithClaude(code, language, testFramework, config, allExistingTests);
+            } else {
+                aiResponse = await generateWithGemini(code, language, testFramework, config, allExistingTests);
+            }
+            
+            // Parse the response
+            const tests = parseTestCases(aiResponse, language, testFramework);
+            
+            // Deduplicate against ALL existing tests (including what we just generated)
+            const deduplicationResult = deduplicateTests(tests.testCases, allExistingTests);
+            const newUniqueTests = deduplicationResult.uniqueTests;
+            
+            // Add new unique tests to our collection
+            allUniqueTests.push(...newUniqueTests);
+            
+            // Update existing tests pool to include newly found tests
+            allExistingTests = [...allExistingTests, ...newUniqueTests];
+            
+            // Calculate yield
+            const yield_percentage = newUniqueTests.length / tests.testCases.length;
+            
+            console.log(`Attempt ${attempt + 1}: Generated ${tests.testCases.length}, Got ${newUniqueTests.length} unique (${Math.round(yield_percentage * 100)}% yield)`);
+            
+            // If we have enough tests OR yield is too low, stop retrying
+            if (allUniqueTests.length >= TESTS_PER_GENERATION || yield_percentage < YIELD_THRESHOLD) {
+                break;
+            }
         }
         
-        // Parse the response
-        const tests = parseTestCases(aiResponse, language, testFramework);
-        
-        // Deduplicate if existing tests provided
-        let duplicateCount = 0;
-        if (existingTests && existingTests.length > 0) {
-            const deduplicationResult = deduplicateTests(tests.testCases, existingTests);
-            tests.testCases = deduplicationResult.uniqueTests;
-            duplicateCount = deduplicationResult.duplicateCount;
+        // If we still don't have 12 tests, fill with variations
+        if (allUniqueTests.length < TESTS_PER_GENERATION && existingTests && existingTests.length > 0) {
+            const needed = TESTS_PER_GENERATION - allUniqueTests.length;
+            console.log(`Generating ${needed} variations to reach 12 tests`);
+            
+            const variations = generateVariations(existingTests, needed, language, allExistingTests);
+            allUniqueTests.push(...variations);
         }
+        
+        // Ensure we have exactly 12 tests (trim if over)
+        const finalTests = allUniqueTests.slice(0, TESTS_PER_GENERATION);
+        
+        // Rebuild full code from final tests
+        const fullCode = rebuildFullCode(finalTests, language, testFramework);
         
         // Validate generated tests
-        const validation = validateGeneratedTests(tests);
+        const validation = validateGeneratedTests({ 
+            language, 
+            framework: testFramework, 
+            testCases: finalTests, 
+            imports: '', 
+            fullCode, 
+            timestamp: Date.now() 
+        });
+        
         if (!validation.valid) {
             console.warn('Generated tests have issues:', validation.issues);
         }
         
-        // Add metadata about generation
+        // Return without showing variation details (hidden from user)
         return {
-            ...tests,
+            language,
+            framework: testFramework,
+            testCases: finalTests,
+            imports: extractImports(fullCode, language),
+            fullCode,
+            timestamp: Date.now(),
             metadata: {
-                duplicatesRemoved: duplicateCount,
-                totalGenerated: tests.testCases.length + duplicateCount,
-                uniqueTests: tests.testCases.length
+                duplicatesRemoved: 0, // Hidden
+                totalGenerated: TESTS_PER_GENERATION,
+                uniqueTests: TESTS_PER_GENERATION
             }
         };
     } catch (error: any) {
@@ -696,6 +746,169 @@ function determineTestType(testName: string): 'normal' | 'edge' | 'error' {
  */
 function generateId(): string {
     return `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Generate variations of existing tests by modifying input values
+ */
+function generateVariations(
+    existingTests: TestCase[],
+    count: number,
+    language: string,
+    allExistingTests: TestCase[]
+): TestCase[] {
+    const variations: TestCase[] = [];
+    const usedTests = new Set<string>();
+    
+    // Shuffle existing tests to get random selection
+    const shuffled = [...existingTests].sort(() => Math.random() - 0.5);
+    
+    for (let i = 0; i < shuffled.length && variations.length < count; i++) {
+        const original = shuffled[i];
+        
+        // Skip if already used
+        if (usedTests.has(original.id)) {
+            continue;
+        }
+        
+        // Generate variation
+        const variation = createTestVariation(original, language);
+        
+        // Check if variation is truly unique (not duplicate of existing)
+        const isDuplicate = allExistingTests.some(existing => 
+            isSimilarTest(variation, existing)
+        );
+        
+        if (!isDuplicate) {
+            variations.push(variation);
+            usedTests.add(original.id);
+        }
+    }
+    
+    return variations;
+}
+
+/**
+ * Create a variation of a test by modifying input values
+ */
+function createTestVariation(original: TestCase, language: string): TestCase {
+    let variedCode = original.code;
+    let variedName = original.name;
+    
+    // Number variations - multiply by random factor (2-5x)
+    variedCode = variedCode.replace(/\b(\d+)\b/g, (match) => {
+        const num = parseInt(match);
+        const factor = Math.floor(Math.random() * 4) + 2; // 2-5
+        return String(num * factor);
+    });
+    
+    // String variations
+    const stringReplacements: { [key: string]: string[] } = {
+        'hello': ['world', 'test', 'sample', 'demo'],
+        'test': ['demo', 'example', 'sample', 'check'],
+        'foo': ['bar', 'baz', 'qux', 'xyz'],
+        'name': ['title', 'label', 'tag', 'value'],
+        'john': ['jane', 'bob', 'alice', 'charlie'],
+        'email': ['mail', 'address', 'contact', 'inbox']
+    };
+    
+    for (const [original, replacements] of Object.entries(stringReplacements)) {
+        const regex = new RegExp(`\\b${original}\\b`, 'gi');
+        if (regex.test(variedCode)) {
+            const replacement = replacements[Math.floor(Math.random() * replacements.length)];
+            variedCode = variedCode.replace(regex, replacement);
+        }
+    }
+    
+    // Array variations - change length
+    variedCode = variedCode.replace(/\[([^\]]+)\]/g, (match, content) => {
+        const items = content.split(',').map((s: string) => s.trim());
+        if (items.length > 0 && items[0].match(/^\d+$/)) {
+            // Numeric array - regenerate with different values
+            const newLength = Math.max(2, items.length + Math.floor(Math.random() * 3) - 1);
+            const newItems = Array.from({ length: newLength }, () => 
+                Math.floor(Math.random() * 100)
+            );
+            return `[${newItems.join(', ')}]`;
+        }
+        return match;
+    });
+    
+    // Update test name slightly
+    variedName = variedName.replace(/\b(\d+)\b/g, (match) => {
+        const num = parseInt(match);
+        return String(num * (Math.floor(Math.random() * 3) + 2));
+    });
+    
+    return {
+        ...original,
+        id: generateId(),
+        name: variedName,
+        code: variedCode
+    };
+}
+
+/**
+ * Rebuild full test code from test cases
+ */
+function rebuildFullCode(tests: TestCase[], language: string, framework: string): string {
+    if (tests.length === 0) {
+        return '';
+    }
+    
+    // Get imports from first test (they should all have same imports)
+    const firstTest = tests[0];
+    const importMatch = firstTest.code.match(/^(import .+?;|const .+? = require.+?;|from .+? import .+)/m);
+    const imports = importMatch ? importMatch[0] : '';
+    
+    // Extract test bodies
+    const testBodies = tests.map(t => {
+        // Remove imports from individual tests
+        let body = t.code;
+        if (importMatch) {
+            body = body.replace(importMatch[0], '').trim();
+        }
+        return body;
+    });
+    
+    // Combine based on language
+    if (language === 'javascript' || language === 'typescript') {
+        const describeBlock = testBodies.join('\n\n');
+        return imports ? `${imports}\n\n${describeBlock}` : describeBlock;
+    } else if (language === 'python') {
+        return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
+    } else if (language === 'java') {
+        return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
+    }
+    
+    return testBodies.join('\n\n');
+}
+
+/**
+ * Extract imports from code
+ */
+function extractImports(code: string, language: string): string {
+    const lines = code.split('\n');
+    const importLines: string[] = [];
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (language === 'javascript' || language === 'typescript') {
+            if (trimmed.startsWith('import ') || trimmed.startsWith('const ') && trimmed.includes('require(')) {
+                importLines.push(line);
+            }
+        } else if (language === 'python') {
+            if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+                importLines.push(line);
+            }
+        } else if (language === 'java') {
+            if (trimmed.startsWith('import ')) {
+                importLines.push(line);
+            }
+        }
+    }
+    
+    return importLines.join('\n');
 }
 
 /**

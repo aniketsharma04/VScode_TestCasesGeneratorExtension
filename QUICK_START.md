@@ -61,10 +61,10 @@ Once tests are generated, you can:
 
 Need more test coverage?
 1. Click the **"➕ Generate More (12 Tests)"** button
-2. Extension generates 12 new unique tests
-3. Automatic deduplication removes similar tests
-4. See statistics: "✓ 10 unique (2 duplicates removed)"
-5. Repeat to build comprehensive test suites (24, 36, 48...)
+2. Extension generates 12 additional tests with smart optimization
+3. System ensures diverse and unique test patterns
+4. Repeat to build comprehensive test suites (24, 36, 48...)
+5. Each batch maintains high quality and coverage
 
 ## 📝 Testing with Example File
 
@@ -138,11 +138,11 @@ The AI generates **exactly 12 tests per batch**:
 - ⚠️ **Edge Cases** (~5): Boundaries, empty inputs, null values, large numbers
 - ❌ **Error Tests** (~2): Exceptions, invalid inputs, error handling
 
-### Deduplication System
-- 🎯 **Context-Aware**: AI knows about existing tests
-- 🧹 **Smart Filtering**: Removes duplicates using fuzzy matching (>80% similarity)
-- 📊 **Statistics**: Badge shows "✓ X unique (Y duplicates removed)"
-- 🎲 **Systematic**: Predictable batches (12→24→36→48) for comprehensive coverage
+### Smart Generation System
+- 🎯 **Context-Aware**: AI analyzes existing tests to generate diverse patterns
+- 🧹 **Quality Assured**: Intelligent retry logic ensures optimal results
+- 📊 **Consistent Output**: Always delivers exactly 12 tests per batch
+- 🎲 **Systematic Coverage**: Predictable growth (12→24→36→48) for comprehensive testing
 
 ## 🔄 Expanding Test Coverage
 

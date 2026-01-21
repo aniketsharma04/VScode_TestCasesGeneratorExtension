@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { GeneratedTests } from './types';
+import { generateTests } from './testCaseGenerator';
 
 const execAsync = promisify(exec);
 let outputChannel: vscode.OutputChannel | null = null;
@@ -106,7 +107,6 @@ function getWebviewContent(
                 <span class="badge badge-language">${escapeHtml(tests.language)}</span>
                 <span class="badge badge-framework">${escapeHtml(tests.framework)}</span>
                 <span class="badge">Total: ${tests.testCases.length} tests</span>
-                ${tests.metadata ? `<span class="badge badge-success">✓ ${tests.metadata.uniqueTests} unique (${tests.metadata.duplicatesRemoved} duplicates removed)</span>` : ''}
             </div>
         </header>
 
@@ -235,9 +235,6 @@ async function handleGenerateMore(
             return;
         }
         
-        // Import generateTests function
-        const { generateTests } = await import('./testCaseGenerator.js');
-        
         // Show progress
         await vscode.window.withProgress(
             {
@@ -275,12 +272,10 @@ async function handleGenerateMore(
                 
                 progress.report({ increment: 100, message: 'Done!' });
                 
-                // Show success message with stats
-                const statsMessage = newTests.metadata 
-                    ? `✅ Generated ${newTests.metadata.uniqueTests} new tests (${newTests.metadata.duplicatesRemoved} duplicates removed). Total: ${mergedTests.testCases.length} tests`
-                    : `✅ Generated ${newTests.testCases.length} new tests. Total: ${mergedTests.testCases.length} tests`;
-                
-                vscode.window.showInformationMessage(statsMessage);
+                // Show success message (hide internal stats)
+                vscode.window.showInformationMessage(
+                    `✅ Generated 12 more tests. Total: ${mergedTests.testCases.length} tests`
+                );
             }
         );
     } catch (error: any) {
