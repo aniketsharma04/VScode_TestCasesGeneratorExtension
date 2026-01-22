@@ -13,6 +13,10 @@ const YIELD_THRESHOLD = 0.5; // If yield < 50%, use variations
 
 /**
  * Main function to generate tests using configured AI provider with retry and variation logic
+ * 
+ * APPROACH 1: Always generate exactly 12 tests per call
+ * APPROACH 2: Pass context-aware prompt with previous test descriptions
+ * APPROACH 3: Deduplicate against ALL historical tests using Levenshtein distance
  */
 export async function generateTests(
     code: string,
@@ -21,21 +25,23 @@ export async function generateTests(
     framework?: string,
     existingTests?: TestCase[]
 ): Promise<GeneratedTests> {
-    // Determine framework if not provided
     const testFramework = framework || getDefaultFramework(language);
     
     let allUniqueTests: TestCase[] = [];
-    let totalAttempts = 0;
     let allExistingTests = existingTests || [];
     let totalDuplicatesRemoved = 0;
     let variationsGenerated = 0;
+    let totalApiCalls = 0;
     
     try {
-        // Try to generate tests with retry logic (max 2 attempts)
-        for (let attempt = 0; attempt < MAX_RETRIES && allUniqueTests.length < TESTS_PER_GENERATION; attempt++) {
-            totalAttempts++;
+        // PHASE 1: Collect results from MAX 2 API calls
+        const apiResults: { tests: TestCase[]; rawCount: number; yieldPercent: number }[] = [];
+        
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            totalApiCalls++;
+            console.log(`\n[Attempt ${totalApiCalls}] Calling AI...`);
             
-            // Generate tests based on provider
+            // Generate tests based on provider (APPROACH 2: Pass historical context)
             let aiResponse: string;
             if (config.apiProvider === 'anthropic') {
                 aiResponse = await generateWithClaude(code, language, testFramework, config, allExistingTests);
@@ -44,48 +50,61 @@ export async function generateTests(
             }
             
             // Parse the response
-            const tests = parseTestCases(aiResponse, language, testFramework);
+            const parsed = parseTestCases(aiResponse, language, testFramework);
             
-            // Deduplicate against ALL existing tests (including what we just generated)
-            const deduplicationResult = deduplicateTests(tests.testCases, allExistingTests);
+            // APPROACH 3: Deduplicate against ALL existing tests
+            const deduplicationResult = deduplicateTests(parsed.testCases, allExistingTests);
             const newUniqueTests = deduplicationResult.uniqueTests;
             
-            // Track duplicates removed
+            // Track deduplication
             totalDuplicatesRemoved += deduplicationResult.duplicateCount;
+            const yieldPercent = (newUniqueTests.length / parsed.testCases.length) * 100;
             
-            // Add new unique tests to our collection
+            apiResults.push({
+                tests: newUniqueTests,
+                rawCount: parsed.testCases.length,
+                yieldPercent: yieldPercent
+            });
+            
+            console.log(`[Attempt ${totalApiCalls}] Generated ${parsed.testCases.length}, Got ${newUniqueTests.length} unique (${Math.round(yieldPercent)}% yield)`);
+            
+            // Add to our collection
             allUniqueTests.push(...newUniqueTests);
-            
-            // Update existing tests pool to include newly found tests
             allExistingTests = [...allExistingTests, ...newUniqueTests];
             
-            // Calculate yield
-            const yield_percentage = newUniqueTests.length / tests.testCases.length;
-            
-            console.log(`Attempt ${attempt + 1}: Generated ${tests.testCases.length}, Got ${newUniqueTests.length} unique (${Math.round(yield_percentage * 100)}% yield)`);
-            
-            // If we have enough tests OR yield is too low, stop retrying
-            if (allUniqueTests.length >= TESTS_PER_GENERATION || yield_percentage < YIELD_THRESHOLD) {
-                break;
-            }
+            // Do not stop early; complete both attempts to compute yield
         }
         
-        // If we still don't have 12 tests, fill with variations
-        if (allUniqueTests.length < TESTS_PER_GENERATION) {
+        // PHASE 2: Check yield threshold AFTER both API attempts
+        const averageYield = apiResults.reduce((sum, r) => sum + r.yieldPercent, 0) / apiResults.length;
+        console.log(`\n[Yield Analysis] Average yield: ${Math.round(averageYield)}%`);
+        
+        if (averageYield < YIELD_THRESHOLD * 100) {
+            console.log(`[Yield Analysis] Below 50% threshold - will use variations to fill remaining tests`);
+        }
+        
+        // PHASE 3: Fill remaining tests with variations only when yield is low or still short
+        const shouldUseVariations = (averageYield < YIELD_THRESHOLD * 100) || (allUniqueTests.length < TESTS_PER_GENERATION);
+        if (shouldUseVariations && allUniqueTests.length < TESTS_PER_GENERATION) {
             const needed = TESTS_PER_GENERATION - allUniqueTests.length;
-            console.log(`Generating ${needed} variations to reach 12 tests`);
+            console.log(`\n[Variations] Need ${needed} more tests - generating rule-based variations...`);
             
-            // Use allExistingTests for variations (includes original + current batch)
+            // Use full history as source for variations
             const sourceTests = allExistingTests.length > 0 ? allExistingTests : allUniqueTests;
             if (sourceTests.length > 0) {
                 const variations = generateVariations(sourceTests, needed, language, allExistingTests);
                 variationsGenerated = variations.length;
                 allUniqueTests.push(...variations);
+                console.log(`[Variations] Generated ${variationsGenerated} variations`);
+                
+                // Add variations to historical tracking for next round
+                allExistingTests = [...allExistingTests, ...variations];
             }
         }
         
-        // Ensure we have exactly 12 tests (trim if over)
+        // PHASE 4: Ensure exactly 12 tests (trim if over)
         const finalTests = allUniqueTests.slice(0, TESTS_PER_GENERATION);
+        console.log(`\n[Final] Returning ${finalTests.length} tests (${totalApiCalls} API calls, ${variationsGenerated} variations)`);
         
         // Rebuild full code from final tests
         const fullCode = rebuildFullCode(finalTests, language, testFramework);
@@ -104,10 +123,7 @@ export async function generateTests(
             console.warn('Generated tests have issues:', validation.issues);
         }
         
-        // Calculate actual statistics
-        const aiGeneratedCount = allUniqueTests.length - variationsGenerated;
-        
-        // Return with internal tracking (for logging) but clean user experience
+        // Return with accurate metadata
         return {
             language,
             framework: testFramework,
@@ -119,9 +135,9 @@ export async function generateTests(
                 duplicatesRemoved: totalDuplicatesRemoved,
                 totalGenerated: TESTS_PER_GENERATION,
                 uniqueTests: finalTests.length,
-                aiGenerated: aiGeneratedCount,
+                aiGenerated: allUniqueTests.length - variationsGenerated,
                 variationsGenerated: variationsGenerated,
-                attempts: totalAttempts
+                attempts: totalApiCalls
             }
         };
     } catch (error: any) {
@@ -210,7 +226,7 @@ async function generateWithGemini(
 }
 
 /**
- * Build optimized prompt for test generation
+ * Build optimized prompt for test generation with APPROACH 2 (Context Awareness)
  */
 function buildTestPrompt(
     code: string, 
@@ -220,19 +236,27 @@ function buildTestPrompt(
 ): string {
     const languageSpecificInstructions = getLanguageSpecificInstructions(language, framework);
     
-    // Build existing tests context
+    // APPROACH 2: Build context-aware prompt with previous test descriptions
     let existingTestsContext = '';
     if (existingTests && existingTests.length > 0) {
-        const testDescriptions = existingTests.map(t => 
-            `- ${t.name}: tests specific functionality`
-        ).join('\n');
+        const testDescriptions = existingTests.map(t => {
+            // Include test type for better context
+            return `- "${t.name}" (${t.type}): This test already covers this scenario`;
+        }).join('\n');
         
-        existingTestsContext = `\n\nEXISTING TESTS (DO NOT DUPLICATE):
-The following ${existingTests.length} tests already exist. Generate DIFFERENT tests with UNIQUE scenarios:
+        existingTestsContext = `\n\n### EXISTING TESTS - DO NOT DUPLICATE
+The following ${existingTests.length} tests have already been generated. These test SPECIFIC scenarios and patterns.
+Generate COMPLETELY DIFFERENT tests that cover aspects NOT covered by these:
+
 ${testDescriptions}
 
-Generate ${TESTS_PER_GENERATION} NEW and DIVERSE tests that cover aspects NOT covered by existing tests above.
-`;
+IMPORTANT:
+- Avoid similar test names, descriptions, and test logic
+- Cover different edge cases, boundaries, and error conditions
+- Use different input values and scenarios
+- Generate tests for different function behaviors or error types
+
+Generate ${TESTS_PER_GENERATION} NEW and UNIQUE tests.`;
     } else {
         existingTestsContext = `\n\nGenerate EXACTLY ${TESTS_PER_GENERATION} diverse and comprehensive tests.`;
     }
@@ -245,33 +269,33 @@ ${code}
 \`\`\`
 ${existingTestsContext}
 
-⚠️ STRICT REQUIREMENT: You MUST generate EXACTLY ${TESTS_PER_GENERATION} tests - NOT ${TESTS_PER_GENERATION - 1}, NOT ${TESTS_PER_GENERATION + 1}, EXACTLY ${TESTS_PER_GENERATION} tests.
+⚠️ CRITICAL REQUIREMENT: Generate EXACTLY ${TESTS_PER_GENERATION} tests (not ${TESTS_PER_GENERATION - 1}, not ${TESTS_PER_GENERATION + 1})
 
-CRITICAL REQUIREMENTS FOR ${framework.toUpperCase()}:
-1. **Import ALL dependencies ONLY ONCE at the very top** - DO NOT repeat imports
-2. **${languageSpecificInstructions.wrapperRequirement}**
-3. **Use correct module path** - ${languageSpecificInstructions.importExample}
-4. **Generate EXACTLY ${TESTS_PER_GENERATION} test cases covering:**
+REQUIREMENTS:
+1. Import ALL dependencies ONLY ONCE at the very top — DO NOT repeat imports
+2. ${languageSpecificInstructions.wrapperRequirement}
+3. Use correct module path — ${languageSpecificInstructions.importExample}
+4. Generate EXACTLY ${TESTS_PER_GENERATION} test cases covering:
    - Normal scenarios (~5 tests): typical valid inputs and expected outputs
    - Edge cases (~5 tests): boundary values, empty inputs, null/undefined, large values
    - Error cases (~2 tests): invalid inputs, exceptions, error handling
-5. **Each test must be independent and runnable**
-6. **Use proper ${framework} syntax and matchers**
-7. **${languageSpecificInstructions.organizationTip}**
+5. Each test must be independent and runnable
+6. Use proper ${framework} syntax and matchers
+7. ${languageSpecificInstructions.organizationTip}
 
 ${languageSpecificInstructions.exampleCode}
 
-CRITICAL - READ CAREFULLY:
+CRITICAL RULES:
 - ${languageSpecificInstructions.importRule}
 - ${languageSpecificInstructions.structureRule}
 - NO explanatory text before/after code
 - COMPLETE, RUNNABLE code only
 - ${languageSpecificInstructions.matcherInfo}
-- ⚠️ EXACTLY ${TESTS_PER_GENERATION} TESTS - COUNT THEM BEFORE RESPONDING
-- If you generate ${TESTS_PER_GENERATION - 1} tests, ADD ONE MORE
-- If you generate ${TESTS_PER_GENERATION + 1} tests, REMOVE ONE
+- COUNT YOUR TESTS: You MUST have EXACTLY ${TESTS_PER_GENERATION} tests
+- If < ${TESTS_PER_GENERATION}: ADD MORE
+- If > ${TESTS_PER_GENERATION}: REMOVE SOME
 
-Generate EXACTLY ${TESTS_PER_GENERATION} tests now:`;
+Generate EXACTLY ${TESTS_PER_GENERATION} tests now.`;
 }
 
 /**
@@ -807,18 +831,47 @@ function generateVariations(
 /**
  * Create a variation of a test by modifying input values
  */
+/**
+ * Create a variation of a test by modifying input values semantically
+ * Preserves test type (normal/edge/error) and semantic correctness
+ */
 function createTestVariation(original: TestCase, language: string): TestCase {
     let variedCode = original.code;
     let variedName = original.name;
     
-    // Number variations - multiply by random factor (2-5x)
-    variedCode = variedCode.replace(/\b(\d+)\b/g, (match) => {
-        const num = parseInt(match);
-        const factor = Math.floor(Math.random() * 4) + 2; // 2-5
-        return String(num * factor);
-    });
+    // Preserve test type information in naming
+    const testType = original.type; // 'normal', 'edge', or 'error'
     
-    // String variations
+    // SEMANTIC CORRECTNESS: Preserve error test semantics
+    if (testType === 'error') {
+        // For error tests, change input values but maintain error trigger
+        // e.g., "divide(10, 0)" → "divide(50, 0)" (still triggers error)
+        variedCode = variedCode.replace(/\b(\d+)\b/g, (match, offset, str) => {
+            // Check if this number is likely a divisor or error trigger
+            const beforeMatch = str.substring(0, offset).toLowerCase();
+            const isErrorTrigger = beforeMatch.includes('0') || beforeMatch.includes('null') || beforeMatch.includes('empty');
+            
+            if (isErrorTrigger && parseInt(match) === 0) {
+                return '0'; // Keep zero for error cases
+            }
+            
+            const num = parseInt(match);
+            if (num === 0) return '0'; // Preserve zeros
+            
+            const factor = Math.floor(Math.random() * 4) + 2; // 2-5x
+            return String(Math.max(1, num * factor));
+        });
+    } else {
+        // For normal/edge tests, vary numbers more freely
+        variedCode = variedCode.replace(/\b(\d+)\b/g, (match) => {
+            const num = parseInt(match);
+            if (num === 0) return '0'; // Don't change 0s in non-error cases (could be indices)
+            const factor = Math.floor(Math.random() * 4) + 2; // 2-5
+            return String(num * factor);
+        });
+    }
+    
+    // String variations - replace common test strings
     const stringReplacements: { [key: string]: string[] } = {
         'hello': ['world', 'test', 'sample', 'demo'],
         'test': ['demo', 'example', 'sample', 'check'],
@@ -828,39 +881,47 @@ function createTestVariation(original: TestCase, language: string): TestCase {
         'email': ['mail', 'address', 'contact', 'inbox']
     };
     
-    for (const [original, replacements] of Object.entries(stringReplacements)) {
-        const regex = new RegExp(`\\b${original}\\b`, 'gi');
+    for (const [origStr, replacements] of Object.entries(stringReplacements)) {
+        const regex = new RegExp(`\\b${origStr}\\b`, 'gi');
         if (regex.test(variedCode)) {
             const replacement = replacements[Math.floor(Math.random() * replacements.length)];
             variedCode = variedCode.replace(regex, replacement);
         }
     }
     
-    // Array variations - change length
+    // Array variations - change values while maintaining type
     variedCode = variedCode.replace(/\[([^\]]+)\]/g, (match, content) => {
         const items = content.split(',').map((s: string) => s.trim());
         if (items.length > 0 && items[0].match(/^\d+$/)) {
-            // Numeric array - regenerate with different values
-            const newLength = Math.max(2, items.length + Math.floor(Math.random() * 3) - 1);
-            const newItems = Array.from({ length: newLength }, () => 
-                Math.floor(Math.random() * 100)
-            );
+            // Numeric array - regenerate with different values (2-5x multiplier)
+            const newItems = items.map((item: string) => {
+                const num = parseInt(item);
+                return String(num * (Math.floor(Math.random() * 4) + 2));
+            });
             return `[${newItems.join(', ')}]`;
         }
         return match;
     });
     
-    // Update test name slightly
+    // Update test name with variation marker
     variedName = variedName.replace(/\b(\d+)\b/g, (match) => {
         const num = parseInt(match);
+        if (num === 0) return '0';
         return String(num * (Math.floor(Math.random() * 3) + 2));
     });
+    
+    // Add subtle variation indicator to name
+    if (!variedName.includes('variant') && !variedName.includes('v2') && !variedName.includes('v3')) {
+        const versionMarkers = ['v2', 'variant', 'alternative'];
+        variedName = `${variedName} (${versionMarkers[Math.floor(Math.random() * versionMarkers.length)]})`;
+    }
     
     return {
         ...original,
         id: generateId(),
         name: variedName,
-        code: variedCode
+        code: variedCode,
+        type: testType  // Preserve test type
     };
 }
 

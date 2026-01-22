@@ -111,7 +111,6 @@ function getWebviewContent(
                 <span class="badge badge-language">${escapeHtml(tests.language)}</span>
                 <span class="badge badge-framework">${escapeHtml(tests.framework)}</span>
                 <span class="badge">Current Batch: ${tests.testCases.length} tests</span>
-                ${tests.metadata?.round ? `<span class="badge badge-info">Round #${tests.metadata.round}</span>` : ''}
             </div>
         </header>
 
@@ -254,7 +253,7 @@ async function handleGenerateMore(
                 const allHistoricalTests = panelContext.allHistoricalTests;
                 const currentRound = panelContext.generationRound + 1;
                 
-                progress.report({ increment: 30, message: `Calling AI (Round #${currentRound})...` });
+                progress.report({ increment: 30, message: 'Calling AI...' });
                 
                 const newTests = await generateTests(
                     panelContext.code,
@@ -297,7 +296,7 @@ async function handleGenerateMore(
                 const totalHistorical = panelContext.allHistoricalTests.length;
                 const metadata = newTests.metadata;
                 
-                let message = `✅ Generated 12 new tests (Round #${currentRound})`;
+                let message = '✅ Generated 12 new tests';
                 
                 // Add context info if interesting
                 const details: string[] = [];
