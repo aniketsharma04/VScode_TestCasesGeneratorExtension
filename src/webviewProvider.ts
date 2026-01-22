@@ -17,6 +17,7 @@ interface PanelContext {
     language: string;
     config: any;
     allHistoricalTests: TestCase[];  // Track all tests ever generated for deduplication
+    generationRound: number;  // Track which generation round we're on
 }
 const panelContexts = new Map<string, PanelContext>();
 
@@ -49,7 +50,8 @@ export function createTestCasePanel(
             code,
             language: tests.language,
             config,
-            allHistoricalTests: [...tests.testCases]  // Initialize with first batch
+            allHistoricalTests: [...tests.testCases],  // Initialize with first batch
+            generationRound: 1  // First generation
         });
     }
     
@@ -108,7 +110,8 @@ function getWebviewContent(
             <div class="header-info">
                 <span class="badge badge-language">${escapeHtml(tests.language)}</span>
                 <span class="badge badge-framework">${escapeHtml(tests.framework)}</span>
-                <span class="badge">Total: ${tests.testCases.length} tests</span>
+                <span class="badge">Current Batch: ${tests.testCases.length} tests</span>
+                ${tests.metadata?.round ? `<span class="badge badge-info">Round #${tests.metadata.round}</span>` : ''}
             </div>
         </header>
 
@@ -249,7 +252,9 @@ async function handleGenerateMore(
                 
                 // Use ALL historical tests for deduplication (not just visible ones)
                 const allHistoricalTests = panelContext.allHistoricalTests;
-                progress.report({ increment: 30, message: `Calling AI...` });
+                const currentRound = panelContext.generationRound + 1;
+                
+                progress.report({ increment: 30, message: `Calling AI (Round #${currentRound})...` });
                 
                 const newTests = await generateTests(
                     panelContext.code,
@@ -266,11 +271,21 @@ async function handleGenerateMore(
                     ...currentTests,
                     testCases: newTests.testCases,  // REPLACE: Only show new 12 tests
                     fullCode: newTests.fullCode,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    metadata: {
+                        duplicatesRemoved: newTests.metadata?.duplicatesRemoved || 0,
+                        totalGenerated: newTests.metadata?.totalGenerated || 12,
+                        uniqueTests: newTests.metadata?.uniqueTests || 12,
+                        aiGenerated: newTests.metadata?.aiGenerated,
+                        variationsGenerated: newTests.metadata?.variationsGenerated,
+                        attempts: newTests.metadata?.attempts,
+                        round: currentRound
+                    }
                 };
                 
                 // Update historical tests in context (add new tests to history)
                 panelContext.allHistoricalTests = [...allHistoricalTests, ...newTests.testCases];
+                panelContext.generationRound = currentRound;
                 panelContexts.set(panel.title, panelContext);
                 
                 // Update the panel with only new tests
@@ -278,10 +293,39 @@ async function handleGenerateMore(
                 
                 progress.report({ increment: 100, message: 'Done!' });
                 
-                // Show success message (simple, no cumulative count)
-                vscode.window.showInformationMessage(
-                    `✅ Generated 12 new tests`
-                );
+                // Build intelligent success message
+                const totalHistorical = panelContext.allHistoricalTests.length;
+                const metadata = newTests.metadata;
+                
+                let message = `✅ Generated 12 new tests (Round #${currentRound})`;
+                
+                // Add context info if interesting
+                const details: string[] = [];
+                if (metadata?.duplicatesRemoved && metadata.duplicatesRemoved > 0) {
+                    details.push(`${metadata.duplicatesRemoved} duplicates avoided`);
+                }
+                if (metadata?.variationsGenerated && metadata.variationsGenerated > 0) {
+                    details.push(`${metadata.variationsGenerated} variations`);
+                }
+                if (totalHistorical > 12) {
+                    details.push(`${totalHistorical} total in history`);
+                }
+                
+                if (details.length > 0) {
+                    message += ` • ${details.join(', ')}`;
+                }
+                
+                // Log detailed stats to console for developers
+                console.log(`[Generate More] Round ${currentRound} Stats:`, {
+                    displayed: 12,
+                    historical: totalHistorical,
+                    duplicatesRemoved: metadata?.duplicatesRemoved || 0,
+                    aiGenerated: metadata?.aiGenerated || 0,
+                    variations: metadata?.variationsGenerated || 0,
+                    attempts: metadata?.attempts || 0
+                });
+                
+                vscode.window.showInformationMessage(message);
             }
         );
     } catch (error: any) {
@@ -344,17 +388,20 @@ async function runTestsInTerminal(
 
         // Create temporary test file
         const tempFileName = getTempTestFileName(language, framework);
-        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
         
         // FIX MODULE PATHS BEFORE WRITING FILE
         const fixedCode = await fixModulePaths(testCode, language);
         
+        // Determine best location for temp file (handles Java package paths)
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        
         // Write test code to file with fixed paths
         const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+        await vscode.workspace.fs.writeFile(tempFileUri, encoder.encode(fixedCode));
         
         // Get test command based on language and framework
-        const testCommand = getTestCommand(language, framework, tempFileName);
+        const javaTestSelector = language === 'java' ? getJavaTestSelector(fixedCode, tempFileName) : null;
+        const testCommand = getTestCommand(language, framework, tempFileName, javaTestSelector);
         
         if (!testCommand) {
             vscode.window.showErrorMessage(`Unable to determine test command for ${language} with ${framework}`);
@@ -387,7 +434,7 @@ async function runTestsInTerminal(
             
             if (shouldDelete === 'Yes') {
                 try {
-                    await vscode.workspace.fs.delete(tempFilePath);
+                    await vscode.workspace.fs.delete(tempFileUri);
                     vscode.window.showInformationMessage('Temporary test file deleted.');
                 } catch (error) {
                     console.error('Failed to delete temp file:', error);
@@ -405,51 +452,68 @@ async function runTestsInTerminal(
  * Fix module paths in generated test code
  */
 async function fixModulePaths(testCode: string, language: string): Promise<string> {
-    if (language !== 'javascript' && language !== 'typescript') {
-        return testCode;
-    }
-    
     const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        return testCode;
-    }
-    
-    // Get the current file name without extension
-    const uri = editor.document.uri;
-    const fileName = uri.path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'module';
-    const fullFileName = uri.path.split('/').pop() || 'module';
-    
-    // Language-specific fixes
+
+    // Fallback to original code if we cannot infer context
+    const uri = editor?.document.uri;
+    const sourceFileName = uri?.path.split('/').pop() || 'module';
+    const baseName = sourceFileName.replace(/\.[^.]+$/, '') || 'module';
+
     let fixed = testCode;
-    
-    // JavaScript/TypeScript - require() and import
-    fixed = fixed
-        .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${fileName}')`)
-        .replace(/require\(['"]\.\/module['"]\)/g, `require('./${fileName}')`)
-        .replace(/require\(['"]\.\/yourFile['"]\)/g, `require('./${fileName}')`)
-        .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${fileName}'`)
-        .replace(/from\s+['"]\.\/module['"]/g, `from './${fileName}'`)
-        .replace(/from\s+['"]\.\/yourFile['"]/g, `from './${fileName}'`);
-    
-    // Python - from X import Y
-    fixed = fixed
-        .replace(/from\s+your_module_name\s+import/g, `from ${fileName} import`)
-        .replace(/from\s+module\s+import/g, `from ${fileName} import`)
-        .replace(/from\s+yourFile\s+import/g, `from ${fileName} import`)
-        .replace(/import\s+your_module_name/g, `import ${fileName}`)
-        .replace(/import\s+module(?!\s*\.)/g, `import ${fileName}`)
-        .replace(/import\s+yourFile/g, `import ${fileName}`);
-    
-    // Java - import statements
-    const className = fileName.charAt(0).toUpperCase() + fileName.slice(1);
-    fixed = fixed
-        .replace(/import\s+YourClass;/g, `import ${className};`)
-        .replace(/import\s+Module;/g, `import ${className};`)
-        .replace(/new\s+YourClass\(/g, `new ${className}(`)
-        .replace(/new\s+Module\(/g, `new ${className}(`)
-        .replace(/YourClass\./g, `${className}.`)
-        .replace(/Module\./g, `${className}.`);
-    
+
+    // JavaScript/TypeScript - normalize module paths
+    if (language === 'javascript' || language === 'typescript') {
+        fixed = fixed
+            .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${baseName}')`)
+            .replace(/require\(['"]\.\/module['"]\)/g, `require('./${baseName}')`)
+            .replace(/require\(['"]\.\/yourFile['"]\)/g, `require('./${baseName}')`)
+            .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${baseName}'`)
+            .replace(/from\s+['"]\.\/module['"]/g, `from './${baseName}'`)
+            .replace(/from\s+['"]\.\/yourFile['"]/g, `from './${baseName}'`);
+        return fixed;
+    }
+
+    // Python - normalize imports
+    if (language === 'python') {
+        fixed = fixed
+            .replace(/from\s+your_module_name\s+import/g, `from ${baseName} import`)
+            .replace(/from\s+module\s+import/g, `from ${baseName} import`)
+            .replace(/from\s+yourFile\s+import/g, `from ${baseName} import`)
+            .replace(/import\s+your_module_name/g, `import ${baseName}`)
+            .replace(/import\s+module(?!\s*\.)/g, `import ${baseName}`)
+            .replace(/import\s+yourFile/g, `import ${baseName}`);
+        return fixed;
+    }
+
+    // Java - normalize imports, class names, and add package if inferable
+    if (language === 'java') {
+        const className = baseName.charAt(0).toUpperCase() + baseName.slice(1);
+        fixed = fixed
+            .replace(/import\s+YourClass;/g, `import ${className};`)
+            .replace(/import\s+Module;/g, `import ${className};`)
+            .replace(/new\s+YourClass\(/g, `new ${className}(`)
+            .replace(/new\s+Module\(/g, `new ${className}(`)
+            .replace(/YourClass\./g, `${className}.`)
+            .replace(/Module\./g, `${className}.`);
+
+        // Attempt to infer package from source path and inject if missing
+        if (uri) {
+            const segments = uri.path.split('/');
+            const javaIndex = segments.lastIndexOf('java');
+            if (javaIndex !== -1 && javaIndex + 1 < segments.length) {
+                const pkgSegments = segments.slice(javaIndex + 1, segments.length - 1); // exclude file
+                if (pkgSegments.length > 0) {
+                    const packageName = pkgSegments.join('.');
+                    const hasPackage = /package\s+[\w\.]+\s*;/.test(fixed);
+                    if (!hasPackage) {
+                        fixed = `package ${packageName};\n\n${fixed}`;
+                    }
+                }
+            }
+        }
+        return fixed;
+    }
+
     return fixed;
 }
 
@@ -483,17 +547,20 @@ async function runTestsWithOutput(
 
         // Create temp file
         const tempFileName = getTempTestFileName(language, framework);
-        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
         
         // FIX MODULE PATHS BEFORE WRITING FILE
         const fixedCode = await fixModulePaths(testCode, language);
         
+        // Determine best location for temp file (handles Java package paths)
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        
         // Write fixed code to temp file
         const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+        await vscode.workspace.fs.writeFile(tempFileUri, encoder.encode(fixedCode));
 
         // Get test command
-        const testCommand = getTestCommand(language, framework, tempFileName);
+        const javaTestSelector = language === 'java' ? getJavaTestSelector(fixedCode, tempFileName) : null;
+        const testCommand = getTestCommand(language, framework, tempFileName, javaTestSelector);
         
         if (!testCommand) {
             outputChannel.appendLine(`❌ Error: No test command found for ${language} with ${framework}`);
@@ -539,7 +606,7 @@ async function runTestsWithOutput(
 
         // Clean up temp file
         try {
-            await vscode.workspace.fs.delete(tempFilePath);
+            await vscode.workspace.fs.delete(tempFileUri);
             outputChannel.appendLine(`Cleaned up temporary file: ${tempFileName}`);
         } catch {
             outputChannel.appendLine(`Note: Temporary file ${tempFileName} may still exist.`);
@@ -583,9 +650,56 @@ function getTempTestFileName(language: string, framework: string): string {
 }
 
 /**
+ * Determine the best temp file location based on language (handles Java package paths)
+ */
+async function getTempFileUri(
+    language: string,
+    tempFileName: string,
+    testCode: string,
+    workspaceFolder: vscode.WorkspaceFolder
+): Promise<vscode.Uri> {
+    // Default: workspace root
+    let baseDir = workspaceFolder.uri;
+
+    if (language === 'java') {
+        // Place temp tests under src/test/java respecting package path when present
+        const javaTestRoot = vscode.Uri.joinPath(workspaceFolder.uri, 'src', 'test', 'java');
+        let targetDir = javaTestRoot;
+
+        const packageMatch = testCode.match(/package\s+([a-zA-Z0-9_.]+)\s*;/);
+        if (packageMatch && packageMatch[1]) {
+            const packagePath = packageMatch[1].split('.').join('/');
+            targetDir = vscode.Uri.joinPath(javaTestRoot, packagePath);
+        }
+
+        await vscode.workspace.fs.createDirectory(targetDir);
+        return vscode.Uri.joinPath(targetDir, tempFileName);
+    }
+
+    return vscode.Uri.joinPath(baseDir, tempFileName);
+}
+
+/**
+ * Build a Maven test selector (fully qualified) from Java code/package
+ */
+function getJavaTestSelector(testCode: string, tempFileName: string): string {
+    const className = tempFileName.replace('.java', '');
+    const packageMatch = testCode.match(/package\s+([a-zA-Z0-9_.]+)\s*;/);
+    if (packageMatch && packageMatch[1]) {
+        return `${packageMatch[1]}.${className}`;
+    }
+    return className;
+}
+
+/**
  * Get the appropriate test command based on language and framework
  */
-function getTestCommand(language: string, framework: string, fileName: string): string | null {
+function getTestCommand(
+    language: string,
+    framework: string,
+    fileName: string,
+    javaTestSelector?: string | null
+): string | null {
     const commands: { [key: string]: string } = {
         // JavaScript/TypeScript - Use Jest with explicit config and rootDir
         'javascript-jest': `npx jest --config=jest.config.js --rootDir=. ${fileName}`,
@@ -600,8 +714,8 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'python-unittest': `python -m unittest ${fileName}`,
         
         // Java - Using Maven
-        'java-junit': `mvn test -Dtest=${fileName.replace('.java', '')}`,
-        'java-testng': `mvn test -Dtest=${fileName.replace('.java', '')}`,
+        'java-junit': `mvn test -Dtest=${javaTestSelector || fileName.replace('.java', '')}`,
+        'java-testng': `mvn test -Dtest=${javaTestSelector || fileName.replace('.java', '')}`,
         
         // Go
         'go-testing': `go test ./${fileName} -v`,
@@ -708,7 +822,8 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
                 const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
                 try {
                     const pomContent = await vscode.workspace.fs.readFile(pomPath);
-                    const hasJunit = pomContent.toString().includes('junit');
+                    const pomText = pomContent.toString();
+                    const hasJunit = pomText.includes('junit-jupiter');
                     console.log('[Framework Check] JUnit in pom.xml:', hasJunit);
                     return hasJunit;
                 } catch {

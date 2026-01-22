@@ -39,6 +39,10 @@ export interface GeneratedTests {
         duplicatesRemoved: number;
         totalGenerated: number;
         uniqueTests: number;
+        aiGenerated?: number;
+        variationsGenerated?: number;
+        attempts?: number;
+        round?: number;
     };
 }
 

@@ -27,6 +27,8 @@ export async function generateTests(
     let allUniqueTests: TestCase[] = [];
     let totalAttempts = 0;
     let allExistingTests = existingTests || [];
+    let totalDuplicatesRemoved = 0;
+    let variationsGenerated = 0;
     
     try {
         // Try to generate tests with retry logic (max 2 attempts)
@@ -48,6 +50,9 @@ export async function generateTests(
             const deduplicationResult = deduplicateTests(tests.testCases, allExistingTests);
             const newUniqueTests = deduplicationResult.uniqueTests;
             
+            // Track duplicates removed
+            totalDuplicatesRemoved += deduplicationResult.duplicateCount;
+            
             // Add new unique tests to our collection
             allUniqueTests.push(...newUniqueTests);
             
@@ -66,12 +71,17 @@ export async function generateTests(
         }
         
         // If we still don't have 12 tests, fill with variations
-        if (allUniqueTests.length < TESTS_PER_GENERATION && existingTests && existingTests.length > 0) {
+        if (allUniqueTests.length < TESTS_PER_GENERATION) {
             const needed = TESTS_PER_GENERATION - allUniqueTests.length;
             console.log(`Generating ${needed} variations to reach 12 tests`);
             
-            const variations = generateVariations(existingTests, needed, language, allExistingTests);
-            allUniqueTests.push(...variations);
+            // Use allExistingTests for variations (includes original + current batch)
+            const sourceTests = allExistingTests.length > 0 ? allExistingTests : allUniqueTests;
+            if (sourceTests.length > 0) {
+                const variations = generateVariations(sourceTests, needed, language, allExistingTests);
+                variationsGenerated = variations.length;
+                allUniqueTests.push(...variations);
+            }
         }
         
         // Ensure we have exactly 12 tests (trim if over)
@@ -94,7 +104,10 @@ export async function generateTests(
             console.warn('Generated tests have issues:', validation.issues);
         }
         
-        // Return without showing variation details (hidden from user)
+        // Calculate actual statistics
+        const aiGeneratedCount = allUniqueTests.length - variationsGenerated;
+        
+        // Return with internal tracking (for logging) but clean user experience
         return {
             language,
             framework: testFramework,
@@ -103,9 +116,12 @@ export async function generateTests(
             fullCode,
             timestamp: Date.now(),
             metadata: {
-                duplicatesRemoved: 0, // Hidden
+                duplicatesRemoved: totalDuplicatesRemoved,
                 totalGenerated: TESTS_PER_GENERATION,
-                uniqueTests: TESTS_PER_GENERATION
+                uniqueTests: finalTests.length,
+                aiGenerated: aiGeneratedCount,
+                variationsGenerated: variationsGenerated,
+                attempts: totalAttempts
             }
         };
     } catch (error: any) {
