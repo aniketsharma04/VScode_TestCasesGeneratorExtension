@@ -11,6 +11,9 @@ import { generateTests } from './testCaseGenerator';
 const execAsync = promisify(exec);
 let outputChannel: vscode.OutputChannel | null = null;
 
+// Track temp files for cleanup on extension deactivate
+const tempFilesToCleanup: vscode.Uri[] = [];
+
 // Store current context for "Generate More" functionality
 interface PanelContext {
     code: string;
@@ -150,9 +153,18 @@ function getWebviewContent(
         <div class="test-cases">
             ${tests.testCases.length > 0 ? `
             <div class="section">
-                <h2>Generated Test Cases</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                    <h2 style="margin: 0;">Generated Test Cases</h2>
+                    <select id="testTypeFilter" style="padding: 0.5rem 1rem; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; cursor: pointer; font-size: 14px;">
+                        <option value="all">All</option>
+                        <option value="normal">Normal Cases</option>
+                        <option value="edge">Edge Cases</option>
+                        <option value="error">Error Cases</option>
+                    </select>
+                </div>
+                <div id="typeDefinition" style="padding: 0.75rem 1rem; margin-bottom: 1.5rem; border-left: 3px solid var(--vscode-textBlockQuote-border); background: var(--vscode-textBlockQuote-background); color: var(--vscode-textBlockQuote-foreground); font-size: 13px; display: none;"></div>
                 ${tests.testCases.map((test, index) => `
-                    <div class="test-case test-${test.type}">
+                    <div class="test-case test-${test.type}" data-test-type="${test.type}">
                         <div class="test-header">
                             <span class="test-number">#${index + 1}</span>
                             <span class="test-name">${escapeHtml(test.name)}</span>
@@ -422,24 +434,23 @@ async function runTestsInTerminal(
         const commandBlock = `cd "${workspaceFolder.uri.fsPath}"; Write-Host "Working Directory: $(Get-Location)" -ForegroundColor Green; ${testCommand}`;
         terminal.sendText(commandBlock);
         
-        // Optional: Clean up after a delay
+        // Track temp file for cleanup on extension close (backup cleanup)
+        tempFilesToCleanup.push(tempFileUri);
+        
+        // Auto-delete temp file after tests complete (with delay to allow terminal to read it)
         setTimeout(async () => {
-            const shouldDelete = await vscode.window.showQuickPick(
-                ['Yes', 'No'],
-                { 
-                    placeHolder: `Delete temporary test file (${tempFileName})?` 
+            try {
+                await vscode.workspace.fs.delete(tempFileUri);
+                // Remove from cleanup list since we deleted it
+                const index = tempFilesToCleanup.indexOf(tempFileUri);
+                if (index > -1) {
+                    tempFilesToCleanup.splice(index, 1);
                 }
-            );
-            
-            if (shouldDelete === 'Yes') {
-                try {
-                    await vscode.workspace.fs.delete(tempFileUri);
-                    vscode.window.showInformationMessage('Temporary test file deleted.');
-                } catch (error) {
-                    console.error('Failed to delete temp file:', error);
-                }
+                console.log(`Auto-deleted temporary test file: ${tempFileName}`);
+            } catch (error) {
+                console.error('Failed to auto-delete temp file:', error);
             }
-        }, 5000); // Wait 5 seconds before asking
+        }, 30000); // 30 seconds delay to ensure tests finish reading the file
         
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to run tests: ${error.message}`);
@@ -538,7 +549,7 @@ async function runTestsWithOutput(
         }
         
         outputChannel.clear();
-        outputChannel.show();
+        // Do not show output panel - Terminal is the primary interface
         outputChannel.appendLine('='.repeat(80));
         outputChannel.appendLine(`Running ${framework} tests...`);
         outputChannel.appendLine('='.repeat(80));
@@ -590,7 +601,7 @@ async function runTestsWithOutput(
             outputChannel.appendLine('='.repeat(80));
             outputChannel.appendLine('✅ Tests completed successfully!');
             
-            vscode.window.showInformationMessage('✅ Tests completed! Check Output panel for results.');
+            vscode.window.showInformationMessage('✅ Tests completed! See Terminal for results.');
 
         } catch (execError: any) {
             outputChannel.appendLine('ERROR:');
@@ -600,7 +611,7 @@ async function runTestsWithOutput(
             outputChannel.appendLine('='.repeat(80));
             outputChannel.appendLine('❌ Tests failed or encountered errors.');
             
-            vscode.window.showErrorMessage('❌ Tests failed. Check Output panel for details.');
+            vscode.window.showErrorMessage('❌ Tests failed. See Terminal for details.');
         }
 
         // Clean up temp file
@@ -929,27 +940,12 @@ async function runTestsWithFrameworkCheck(
         // If 'Run Anyway', proceed below
     }
     
-    // Ask user which method to use
-    const method = await vscode.window.showQuickPick(
-        [
-            { label: 'Terminal', description: 'Run tests in integrated terminal (real-time output)' },
-            { label: 'Output Panel', description: 'Run tests and show results in output panel' }
-        ],
-        {
-            placeHolder: 'Choose how to run tests'
-        }
-    );
-    
-    if (!method) {
-        return;
-    }
-    
-    // Proceed with running tests
-    if (method.label === 'Terminal') {
-        await runTestsInTerminal(testCode, language, framework);
-    } else {
-        await runTestsWithOutput(testCode, language, framework);
-    }
+    // Run in both terminal and output panel for better UX
+    vscode.window.showInformationMessage('Running tests in Terminal and Output panel...');
+
+    // Run terminal first (streams live), then output channel (captured results)
+    await runTestsInTerminal(testCode, language, framework);
+    await runTestsWithOutput(testCode, language, framework);
 }
 
 /**
@@ -1041,4 +1037,23 @@ function getNonce(): string {
  */
 function getUri(webview: vscode.Webview, context: vscode.ExtensionContext, pathSegments: string[]): vscode.Uri {
     return webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, ...pathSegments));
+}
+
+/**
+ * Cleanup all temp files (called on extension deactivate)
+ */
+export async function cleanupTempFiles(): Promise<void> {
+    console.log(`Cleaning up ${tempFilesToCleanup.length} temporary test files...`);
+    
+    for (const fileUri of tempFilesToCleanup) {
+        try {
+            await vscode.workspace.fs.delete(fileUri);
+            console.log(`Deleted temp file: ${fileUri.fsPath}`);
+        } catch (error) {
+            console.error(`Failed to delete temp file ${fileUri.fsPath}:`, error);
+        }
+    }
+    
+    // Clear the array
+    tempFilesToCleanup.length = 0;
 }

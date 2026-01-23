@@ -255,7 +255,16 @@ Generate ${TESTS_PER_GENERATION} NEW and UNIQUE tests.`;
         existingTestsContext = `\n\nGenerate EXACTLY ${TESTS_PER_GENERATION} diverse and comprehensive tests.`;
     }
     
-    return `You are an expert software testing engineer. Generate EXACTLY ${TESTS_PER_GENERATION} comprehensive, RUNNABLE unit tests for the following ${language} code.
+    return `🚨 MANDATORY REQUIREMENT: YOU MUST GENERATE EXACTLY ${TESTS_PER_GENERATION} TEST CASES 🚨
+
+You are an expert software testing engineer. Your task is to generate EXACTLY ${TESTS_PER_GENERATION} comprehensive, RUNNABLE unit tests.
+
+ABSOLUTE RULE: ${TESTS_PER_GENERATION} TESTS REQUIRED
+- NOT ${TESTS_PER_GENERATION - 9} tests
+- NOT ${TESTS_PER_GENERATION - 6} tests  
+- NOT ${TESTS_PER_GENERATION - 3} tests
+- NOT ${TESTS_PER_GENERATION - 1} tests
+- EXACTLY ${TESTS_PER_GENERATION} TESTS
 
 CODE TO TEST:
 \`\`\`${language}
@@ -263,33 +272,41 @@ ${code}
 \`\`\`
 ${existingTestsContext}
 
-⚠️ CRITICAL REQUIREMENT: Generate EXACTLY ${TESTS_PER_GENERATION} tests (not ${TESTS_PER_GENERATION - 1}, not ${TESTS_PER_GENERATION + 1})
+📋 MANDATORY TEST COUNT BREAKDOWN (MUST TOTAL ${TESTS_PER_GENERATION}):
+✓ Normal scenarios: 5-6 tests (typical valid inputs)
+✓ Edge cases: 4-5 tests (boundary values, empty, null, large values)
+✓ Error cases: 2-3 tests (invalid inputs, exceptions)
+= TOTAL: EXACTLY ${TESTS_PER_GENERATION} TESTS
 
 REQUIREMENTS:
 1. Import ALL dependencies ONLY ONCE at the very top — DO NOT repeat imports
 2. ${languageSpecificInstructions.wrapperRequirement}
 3. Use correct module path — ${languageSpecificInstructions.importExample}
-4. Generate EXACTLY ${TESTS_PER_GENERATION} test cases covering:
-   - Normal scenarios (~5 tests): typical valid inputs and expected outputs
-   - Edge cases (~5 tests): boundary values, empty inputs, null/undefined, large values
-   - Error cases (~2 tests): invalid inputs, exceptions, error handling
+4. Generate EXACTLY ${TESTS_PER_GENERATION} test cases (see breakdown above)
 5. Each test must be independent and runnable
 6. Use proper ${framework} syntax and matchers
 7. ${languageSpecificInstructions.organizationTip}
 
 ${languageSpecificInstructions.exampleCode}
 
-CRITICAL RULES:
+CRITICAL SYNTAX VALIDATION RULES:
 - ${languageSpecificInstructions.importRule}
 - ${languageSpecificInstructions.structureRule}
 - NO explanatory text before/after code
 - COMPLETE, RUNNABLE code only
 - ${languageSpecificInstructions.matcherInfo}
-- COUNT YOUR TESTS: You MUST have EXACTLY ${TESTS_PER_GENERATION} tests
-- If < ${TESTS_PER_GENERATION}: ADD MORE
-- If > ${TESTS_PER_GENERATION}: REMOVE SOME
 
-Generate EXACTLY ${TESTS_PER_GENERATION} tests now.`;
+🔢 FINAL VERIFICATION CHECKLIST (COMPLETE BEFORE RETURNING):
+□ Step 1: Count how many test() or it() blocks you wrote
+□ Step 2: If count < ${TESTS_PER_GENERATION}: GO BACK and add more tests until you reach ${TESTS_PER_GENERATION}
+□ Step 3: If count > ${TESTS_PER_GENERATION}: GO BACK and remove excess tests to get exactly ${TESTS_PER_GENERATION}
+□ Step 4: Verify count === ${TESTS_PER_GENERATION} (THIS IS MANDATORY)
+□ Step 5: Check syntax validity (brackets, indentation, semicolons)
+□ Step 6: Only NOW return your code
+
+DO NOT RETURN CODE UNTIL YOU HAVE VERIFIED ${TESTS_PER_GENERATION} TESTS EXIST.
+
+Generate your ${TESTS_PER_GENERATION} tests now:`;
 }
 
 /**
@@ -306,29 +323,92 @@ function getLanguageSpecificInstructions(language: string, framework: string): {
 } {
     const instructions: { [key: string]: any } = {
         'javascript': {
-            wrapperRequirement: 'Wrap all tests in a single describe() block',
+            wrapperRequirement: 'Wrap ALL ${TESTS_PER_GENERATION} tests in a SINGLE describe() block',
             importExample: 'If testing example.js, use require(\'./example\')',
             organizationTip: 'Use nested describe blocks for better organization',
-            exampleCode: `EXACT STRUCTURE (Jest example):
+            exampleCode: `⚠️ CRITICAL: You MUST generate EXACTLY ${TESTS_PER_GENERATION} test() blocks, NOT 2, NOT 5, EXACTLY ${TESTS_PER_GENERATION}!
+
+EXACT STRUCTURE (Jest - ${TESTS_PER_GENERATION} tests required):
 \`\`\`javascript
 const { add, divide, findMax } = require('./example');
 
 describe('Example Functions', () => {
-  describe('add function', () => {
-    test('should add two positive numbers', () => {
-      expect(add(2, 3)).toBe(5);
-    });
+  // Test 1
+  test('should add two positive numbers', () => {
+    expect(add(2, 3)).toBe(5);
   });
   
-  describe('divide function', () => {
-    test('should throw error on division by zero', () => {
-      expect(() => divide(5, 0)).toThrow();
-    });
+  // Test 2
+  test('should add positive and negative numbers', () => {
+    expect(add(5, -2)).toBe(3);
+  });
+  
+  // Test 3
+  test('should add two negative numbers', () => {
+    expect(add(-5, -3)).toBe(-8);
+  });
+  
+  // Test 4
+  test('should add floating point numbers', () => {
+    expect(add(2.5, 3.5)).toBe(6);
+  });
+  
+  // Test 5
+  test('should divide two positive numbers', () => {
+    expect(divide(10, 2)).toBe(5);
+  });
+  
+  // Test 6
+  test('should divide negative by positive', () => {
+    expect(divide(-10, 2)).toBe(-5);
+  });
+  
+  // Test 7
+  test('should return zero dividing zero by non-zero', () => {
+    expect(divide(0, 5)).toBe(0);
+  });
+  
+  // Test 8
+  test('should throw error on division by zero', () => {
+    expect(() => divide(5, 0)).toThrow();
+  });
+  
+  // Test 9
+  test('should find max in positive array', () => {
+    expect(findMax([1, 5, 2, 8, 3])).toBe(8);
+  });
+  
+  // Test 10
+  test('should find max in mixed array', () => {
+    expect(findMax([-1, 5, -8, 2, 0])).toBe(5);
+  });
+  
+  // Test 11
+  test('should return null for empty array', () => {
+    expect(findMax([])).toBeNull();
+  });
+  
+  // Test 12
+  test('should return single element for one-element array', () => {
+    expect(findMax([7])).toBe(7);
   });
 });
-\`\`\``,
-            importRule: 'ONE import/require statement at top',
-            structureRule: 'ONE main describe block wrapping everything',
+\`\`\`
+
+⚠️ COUNT YOUR TESTS: The example above has EXACTLY 12 test() blocks numbered Test 1 through Test 12. YOU MUST DO THE SAME!
+
+STRICT SYNTAX RULES:
+1. ONE require() statement at the very top - NO duplicates
+2. ONE describe() block wrapping ALL ${TESTS_PER_GENERATION} tests
+3. EXACTLY ${TESTS_PER_GENERATION} test() blocks inside describe
+4. Use EXACTLY 2 spaces for each indentation level
+5. Every opening { must have matching closing }
+6. Every statement inside test must end with semicolon;
+7. Close describe with }); at the end
+8. NO test() blocks outside of describe()
+9. Verify: count(test() blocks) === ${TESTS_PER_GENERATION} before returning`,
+            importRule: 'ONE require() statement at top - NO duplicate require() anywhere',
+            structureRule: 'ONE describe block with EXACTLY ${TESTS_PER_GENERATION} test() blocks inside - NO orphan test() blocks',
             matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow(), .toBeNull()'
         },
         'typescript': {
@@ -346,39 +426,79 @@ describe('Example Functions', () => {
     });
   });
 });
-\`\`\``,
-            importRule: 'ONE import statement at top',
-            structureRule: 'ONE main describe block wrapping everything',
+\`\`\`
+
+STRICT SYNTAX RULES:
+1. Use EXACTLY 2 spaces for each indentation level
+2. Every opening brace { must have matching closing brace }
+3. Import statement must be valid ES6 syntax with semicolon
+4. All statements inside test must end with semicolon;
+5. Verify bracket count: count({) must equal count(})`,
+            importRule: 'ONE import statement at top - NO duplicate imports',
+            structureRule: 'ONE main describe block wrapping everything - proper bracket matching',
             matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow()'
         },
         'python': {
             wrapperRequirement: 'Wrap all tests in a test class or use separate test functions',
             importExample: 'If testing example.py, use from example import add, divide',
             organizationTip: 'Group related tests in test classes',
-            exampleCode: `EXACT STRUCTURE (Pytest example):
-\`\`\`python
-from example import add, divide, find_max
-import pytest
+                exampleCode: `EXACT STRUCTURE (Pytest example):
+    \`\`\`python
+    from example import add, divide, find_max
+    import pytest
 
-class TestCalculator:
-    def test_add_positive_numbers(self):
-        assert add(2, 3) == 5
+    class TestCalculator:
+        def test_add_positive_numbers(self):
+            assert add(2, 3) == 5
     
-    def test_add_negative_numbers(self):
-        assert add(-1, -2) == -3
+        def test_add_negative_numbers(self):
+            assert add(-1, -2) == -3
     
-    def test_divide_normal(self):
-        assert divide(6, 3) == 2
+        def test_divide_normal(self):
+            assert divide(6, 3) == 2
     
-    def test_divide_by_zero_raises_error(self):
-        with pytest.raises(ValueError):
-            divide(5, 0)
+        def test_divide_by_zero_raises_error(self):
+            with pytest.raises(ValueError):
+                divide(5, 0)
     
-    def test_find_max_normal(self):
-        assert find_max([1, 5, 3]) == 5
-\`\`\``,
-            importRule: 'ONE import statement at top: from module import functions',
-            structureRule: 'Use test class or separate test functions with test_ prefix',
+        def test_find_max_normal(self):
+            assert find_max([1, 5, 3]) == 5
+    \`\`\`
+
+    🚨 CRITICAL PYTHON INDENTATION RULES (MOST COMMON ERROR - READ CAREFULLY):
+
+    INDENTATION LEVELS (Use SPACES, never TABS):
+    [Column 0] → Imports and class definition
+    [4 spaces] → Method definitions (def test_...)
+    [8 spaces] → Code inside methods (assert, with, etc.)
+    [12 spaces] → Code inside nested blocks (inside with/for/if)
+
+    STEP-BY-STEP CHECKLIST:
+    1. ✓ Imports start at column 0 (NO spaces before 'from' or 'import')
+    2. ✓ Blank line after imports
+    3. ✓ 'class TestCalculator:' starts at column 0 (NO spaces before 'class')
+    4. ✓ Each 'def test_...' line starts with EXACTLY 4 spaces
+    5. ✓ Code inside each method starts with EXACTLY 8 spaces
+    6. ✓ 'with pytest.raises():' line has 8 spaces, code inside has 12 spaces
+    7. ✓ Use ONLY spaces (press spacebar 4 times, never press TAB key)
+    8. ✓ Count spaces visually: 0, 4, 8, 12, 16... (multiples of 4 only)
+
+    COMMON MISTAKES TO AVOID:
+    ❌ WRONG: Adding spaces before 'class TestCalculator:'
+    ❌ WRONG: Using 2 or 3 spaces instead of 4
+    ❌ WRONG: Mixing tabs and spaces
+    ❌ WRONG: Forgetting to indent method bodies
+    ✅ CORRECT: class at 0, def at 4, code at 8
+
+    BEFORE YOU SUBMIT - VERIFY EACH LINE:
+    Line 1: from... (0 spaces) ✓
+    Line 2: import... (0 spaces) ✓
+    Line 3: blank
+    Line 4: class TestCalculator: (0 spaces) ✓
+    Line 5:     def test_... (4 spaces) ✓
+    Line 6:         assert... (8 spaces) ✓`,
+                importRule: 'Import statements at column 0 with ZERO indentation',
+                structureRule: 'class at column 0, def at 4 spaces, code at 8+ spaces - NO EXCEPTIONS',
             matcherInfo: 'Use assert statements and pytest.raises() for exceptions'
         },
         'java': {
@@ -420,9 +540,18 @@ public class CalculatorTest {
         assertEquals(5, Calculator.findMax(new int[]{1, 5, 3}));
     }
 }
-\`\`\``,
-            importRule: 'Import JUnit 5 classes (org.junit.jupiter.api.*) and class under test',
-            structureRule: 'Create test class with @Test methods, use assertThrows() for exceptions',
+\`\`\`
+
+STRICT SYNTAX RULES:
+1. Use EXACTLY 4 spaces for each indentation level
+2. Package declaration must be first line (if present)
+3. Imports come after package, before class
+4. Every method must have matching opening/closing braces
+5. @Test annotation goes directly above each test method (no blank line)
+6. Each statement inside methods must end with semicolon;
+7. Verify brace count: count({) must equal count(})`,
+            importRule: 'Import JUnit 5 classes first, then static imports, then test class',
+            structureRule: 'Class definition, then @Test methods at 4-space indent, code at 8 spaces',
             matcherInfo: 'Use assertEquals(), assertTrue(), assertFalse(), assertThrows(), assertNull()'
         }
     };

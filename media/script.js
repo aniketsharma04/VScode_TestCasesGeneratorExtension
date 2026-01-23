@@ -5,6 +5,13 @@
     // Get test data from window
     const testData = window.testData;
     
+    // Test type definitions
+    const typeDefinitions = {
+        normal: '✓ Normal Cases: Tests typical scenarios with standard valid inputs to ensure core functionality works as expected.',
+        edge: '⚠️ Edge Cases: Tests boundary conditions, empty inputs, null/undefined values, and extreme inputs to verify robustness.',
+        error: '❌ Error Cases: Tests invalid inputs and exception handling to ensure graceful error management.'
+    };
+    
     // Initialize when DOM is loaded
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initializeEventListeners);
@@ -40,6 +47,12 @@
             runTestsBtn.addEventListener('click', () => runTests());
         }
         
+        // Test Type Filter Dropdown
+        const filterDropdown = document.getElementById('testTypeFilter');
+        if (filterDropdown) {
+            filterDropdown.addEventListener('change', (e) => filterTestsByType(e.target.value));
+        }
+        
         // Small copy buttons for individual tests
         const smallCopyBtns = document.querySelectorAll('.copy-btn-small[data-copy]');
         smallCopyBtns.forEach(btn => {
@@ -52,6 +65,30 @@
                 }
             });
         });
+    }
+    
+    /**
+     * Filter tests by type (all, normal, edge, error)
+     */
+    function filterTestsByType(type) {
+        const testCases = document.querySelectorAll('[data-test-type]');
+        const definitionDiv = document.getElementById('typeDefinition');
+        
+        testCases.forEach(testCase => {
+            if (type === 'all') {
+                testCase.style.display = 'block';
+            } else {
+                testCase.style.display = testCase.getAttribute('data-test-type') === type ? 'block' : 'none';
+            }
+        });
+        
+        // Show/hide definition
+        if (type === 'all') {
+            definitionDiv.style.display = 'none';
+        } else {
+            definitionDiv.textContent = typeDefinitions[type] || '';
+            definitionDiv.style.display = 'block';
+        }
     }
     
     // Helper function to clean test code

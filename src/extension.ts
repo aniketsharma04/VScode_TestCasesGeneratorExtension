@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { getConfig, getApiKey, promptForApiKey, storeApiKey } from './config';
 import { getLanguageFromDocument, showLanguageSelector, validateCode } from './languageDetector';
 import { generateTests } from './testCaseGenerator';
-import { createTestCasePanel } from './webviewProvider';
+import { createTestCasePanel, cleanupTempFiles } from './webviewProvider';
 import { registerSidebarView } from './sidebarProvider';
 import type { SupportedLanguage } from './types';
 
@@ -318,5 +318,12 @@ function showWelcomeMessage(context: vscode.ExtensionContext) {
  * Extension deactivation
  */
 export function deactivate() {
-    console.log('AI Test Case Generator extension is now deactivated');
+    console.log('AI Test Case Generator extension is now deactivating');
+    
+    // Cleanup any remaining temp test files
+    cleanupTempFiles().then(() => {
+        console.log('Temp file cleanup complete');
+    }).catch((error) => {
+        console.error('Error during temp file cleanup:', error);
+    });
 }
