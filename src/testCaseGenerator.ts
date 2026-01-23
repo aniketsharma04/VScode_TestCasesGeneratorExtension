@@ -48,8 +48,23 @@ export async function generateTests(
                 aiResponse = await generateWithGemini(code, language, testFramework, config, allExistingTests);
             }
             
+            // SOLUTION 7: Post-process to fix structure issues
+            console.log(`[Post-Processor] Raw AI response length: ${aiResponse.length} chars`);
+            const moduleName = extractModuleName(code, language);
+            const fixedResponse = fixTestStructure(aiResponse, language, testFramework, moduleName);
+            console.log(`[Post-Processor] Fixed response length: ${fixedResponse.length} chars`);
+            
+            // SOLUTION 1: Validate structure
+            const validation = validateTestStructure(fixedResponse, language);
+            if (!validation.valid) {
+                console.warn(`[Validation] Structure issues found:`, validation.errors);
+                // Continue anyway but log warnings
+            } else {
+                console.log(`[Validation] ✓ Structure valid`);
+            }
+            
             // Parse the response
-            const parsed = parseTestCases(aiResponse, language, testFramework);
+            const parsed = parseTestCases(fixedResponse, language, testFramework);
             
             // APPROACH 3: Deduplicate against ALL existing tests
             const deduplicationResult = deduplicateTests(parsed.testCases, allExistingTests);
@@ -442,70 +457,135 @@ STRICT SYNTAX RULES:
             wrapperRequirement: 'Wrap all tests in a test class or use separate test functions',
             importExample: 'If testing example.py, use from example import add, divide',
             organizationTip: 'Group related tests in test classes',
-                exampleCode: `EXACT STRUCTURE (Pytest example):
-    \`\`\`python
-    from example import add, divide, find_max
-    import pytest
+            exampleCode: `⚠️ CRITICAL: Generate EXACTLY ${TESTS_PER_GENERATION} complete test methods!
 
-    class TestCalculator:
-        def test_add_positive_numbers(self):
-            assert add(2, 3) == 5
+EXACT STRUCTURE - COPY THIS FORMAT EXACTLY (pytest with ${TESTS_PER_GENERATION} tests):
+\`\`\`python
+import pytest
+from calculator import Calculator
+
+class TestCalculator:
+    def test_add_positive_numbers(self):
+        calc = Calculator()
+        assert calc.add(2, 3) == 5
     
-        def test_add_negative_numbers(self):
-            assert add(-1, -2) == -3
+    def test_add_negative_numbers(self):
+        calc = Calculator()
+        assert calc.add(-5, -3) == -8
     
-        def test_divide_normal(self):
-            assert divide(6, 3) == 2
+    def test_add_zero(self):
+        calc = Calculator()
+        assert calc.add(5, 0) == 5
     
-        def test_divide_by_zero_raises_error(self):
-            with pytest.raises(ValueError):
-                divide(5, 0)
+    def test_add_floats(self):
+        calc = Calculator()
+        assert calc.add(2.5, 3.5) == 6.0
     
-        def test_find_max_normal(self):
-            assert find_max([1, 5, 3]) == 5
-    \`\`\`
+    def test_subtract_positive(self):
+        calc = Calculator()
+        assert calc.subtract(10, 3) == 7
+    
+    def test_subtract_negative(self):
+        calc = Calculator()
+        assert calc.subtract(5, -2) == 7
+    
+    def test_multiply_positive(self):
+        calc = Calculator()
+        assert calc.multiply(4, 5) == 20
+    
+    def test_multiply_by_zero(self):
+        calc = Calculator()
+        assert calc.multiply(10, 0) == 0
+    
+    def test_divide_positive(self):
+        calc = Calculator()
+        assert calc.divide(10, 2) == 5.0
+    
+    def test_divide_by_zero_raises_error(self):
+        calc = Calculator()
+        with pytest.raises(ValueError):
+            calc.divide(10, 0)
+    
+    def test_power_positive(self):
+        calc = Calculator()
+        assert calc.power(2, 3) == 8
+    
+    def test_square_root(self):
+        calc = Calculator()
+        assert calc.sqrt(16) == 4.0
+\`\`\`
 
-    🚨 CRITICAL PYTHON INDENTATION RULES (MOST COMMON ERROR - READ CAREFULLY):
+⚠️ COUNT: The example above has EXACTLY ${TESTS_PER_GENERATION} methods. YOU MUST DO THE SAME!
 
-    INDENTATION LEVELS (Use SPACES, never TABS):
-    [Column 0] → Imports and class definition
-    [4 spaces] → Method definitions (def test_...)
-    [8 spaces] → Code inside methods (assert, with, etc.)
-    [12 spaces] → Code inside nested blocks (inside with/for/if)
+🚨 CRITICAL PYTHON SYNTAX RULES - INCOMPLETE CODE IS THE #1 ERROR:
 
-    STEP-BY-STEP CHECKLIST:
-    1. ✓ Imports start at column 0 (NO spaces before 'from' or 'import')
-    2. ✓ Blank line after imports
-    3. ✓ 'class TestCalculator:' starts at column 0 (NO spaces before 'class')
-    4. ✓ Each 'def test_...' line starts with EXACTLY 4 spaces
-    5. ✓ Code inside each method starts with EXACTLY 8 spaces
-    6. ✓ 'with pytest.raises():' line has 8 spaces, code inside has 12 spaces
-    7. ✓ Use ONLY spaces (press spacebar 4 times, never press TAB key)
-    8. ✓ Count spaces visually: 0, 4, 8, 12, 16... (multiples of 4 only)
+EVERY STATEMENT MUST BE COMPLETE:
+❌ WRONG: for item in items (INCOMPLETE - missing colon and body)
+✅ CORRECT: for item in items:
+              process(item)
 
-    COMMON MISTAKES TO AVOID:
-    ❌ WRONG: Adding spaces before 'class TestCalculator:'
-    ❌ WRONG: Using 2 or 3 spaces instead of 4
-    ❌ WRONG: Mixing tabs and spaces
-    ❌ WRONG: Forgetting to indent method bodies
-    ✅ CORRECT: class at 0, def at 4, code at 8
+❌ WRONG: if x > 0 (INCOMPLETE - missing colon and body)
+✅ CORRECT: if x > 0:
+              return x
 
-    BEFORE YOU SUBMIT - VERIFY EACH LINE:
-    Line 1: from... (0 spaces) ✓
-    Line 2: import... (0 spaces) ✓
-    Line 3: blank
-    Line 4: class TestCalculator: (0 spaces) ✓
-    Line 5:     def test_... (4 spaces) ✓
-    Line 6:         assert... (8 spaces) ✓`,
-                importRule: 'Import statements at column 0 with ZERO indentation',
-                structureRule: 'class at column 0, def at 4 spaces, code at 8+ spaces - NO EXCEPTIONS',
+❌ WRONG: with pytest.raises(ValueError) (INCOMPLETE - missing colon)
+✅ CORRECT: with pytest.raises(ValueError):
+              divide(5, 0)
+
+❌ WRONG: result = calculate( (INCOMPLETE - missing closing paren)
+✅ CORRECT: result = calculate(10)
+
+INDENTATION LEVELS (Use SPACES, never TABS):
+[Column 0] → Imports and class definition
+[4 spaces] → Method definitions (def test_...)
+[8 spaces] → Code inside methods (assert, with, etc.)
+[12 spaces] → Code inside nested blocks (inside with/for/if)
+
+MANDATORY FORMAT:
+- Line 1: import pytest (NO spaces before import)
+- Line 2: from module import Class (NO spaces before from)
+- Line 3: BLANK LINE
+- Line 4: class TestXxx: (NO spaces before class, MUST end with colon)
+- Line 5 onwards: def test_xxx(self): with EXACTLY 4 spaces and colon at end
+- Method body: assert/code with EXACTLY 8 spaces
+- Nested blocks: EXACTLY 12 spaces
+
+STEP-BY-STEP CHECKLIST:
+1. ✓ Imports start at column 0 (NO spaces before 'from' or 'import')
+2. ✓ Blank line after imports
+3. ✓ 'class TestCalculator:' starts at column 0 with colon at end
+4. ✓ Each 'def test_...(self):' line starts with EXACTLY 4 spaces and ends with colon
+5. ✓ Code inside each method starts with EXACTLY 8 spaces
+6. ✓ Every for/if/with/try statement ends with colon and has indented body
+7. ✓ All parentheses/brackets are closed
+8. ✓ Use ONLY spaces (never press TAB key)
+
+COMMON MISTAKES TO AVOID:
+❌ WRONG: for item in items (missing : and body)
+❌ WRONG: if condition (missing : and body)
+❌ WRONG: with pytest.raises() (missing : after)
+❌ WRONG: Adding spaces before 'class TestCalculator:'
+❌ WRONG: Using 2 or 3 spaces instead of 4
+✅ CORRECT: Every control structure ends with : and has body
+✅ CORRECT: All code blocks properly indented with 4-space increments
+
+BEFORE YOU SUBMIT - VERIFY:
+- Count ${TESTS_PER_GENERATION} test methods exist
+- Every line with class/def/if/for/with/try ends with :
+- Every for/if/with/try has an indented body below it
+- All parentheses and brackets are closed
+- No incomplete statements`,
+            importRule: 'Import statements at column 0 with ZERO indentation',
+            structureRule: 'class at column 0, def at 4 spaces, code at 8+ spaces - ALL statements must be complete with colons and bodies',
             matcherInfo: 'Use assert statements and pytest.raises() for exceptions'
         },
         'java': {
             wrapperRequirement: 'Create a test class with @Test methods (JUnit 5)',
             importExample: 'If testing Calculator.java, import com.testcase.Calculator',
             organizationTip: 'Use @Test annotation for each test method',
-            exampleCode: `EXACT STRUCTURE (JUnit 5 example):
+            exampleCode: `⚠️ CRITICAL: Generate EXACTLY ${TESTS_PER_GENERATION} test methods!
+
+EXACT STRUCTURE - COPY THIS FORMAT (JUnit 5 with ${TESTS_PER_GENERATION} tests):
 \`\`\`java
 package com.testcase;
 
@@ -514,18 +594,43 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class CalculatorTest {
     @Test
-    public void testAdd() {
+    public void testAddPositiveNumbers() {
         assertEquals(5, Calculator.add(2, 3));
     }
     
     @Test
-    public void testAddNegative() {
-        assertEquals(-3, Calculator.add(-1, -2));
+    public void testAddNegativeNumbers() {
+        assertEquals(-8, Calculator.add(-5, -3));
     }
     
     @Test
-    public void testDivide() {
-        assertEquals(2.0, Calculator.divide(6, 3), 0.001);
+    public void testAddZero() {
+        assertEquals(5, Calculator.add(5, 0));
+    }
+    
+    @Test
+    public void testSubtractPositive() {
+        assertEquals(7, Calculator.subtract(10, 3));
+    }
+    
+    @Test
+    public void testSubtractNegative() {
+        assertEquals(7, Calculator.subtract(5, -2));
+    }
+    
+    @Test
+    public void testMultiplyPositive() {
+        assertEquals(20, Calculator.multiply(4, 5));
+    }
+    
+    @Test
+    public void testMultiplyByZero() {
+        assertEquals(0, Calculator.multiply(10, 0));
+    }
+    
+    @Test
+    public void testDividePositive() {
+        assertEquals(5.0, Calculator.divide(10, 2), 0.001);
     }
     
     @Test
@@ -536,22 +641,75 @@ public class CalculatorTest {
     }
     
     @Test
+    public void testPowerPositive() {
+        assertEquals(8, Calculator.power(2, 3));
+    }
+    
+    @Test
+    public void testSquareRoot() {
+        assertEquals(4.0, Calculator.sqrt(16), 0.001);
+    }
+    
+    @Test
     public void testFindMax() {
-        assertEquals(5, Calculator.findMax(new int[]{1, 5, 3}));
+        assertEquals(8, Calculator.findMax(new int[]{1, 5, 8, 3}));
     }
 }
 \`\`\`
 
+⚠️ COUNT: The example above has EXACTLY ${TESTS_PER_GENERATION} @Test methods. YOU MUST DO THE SAME!
+
+🚨 CRITICAL JAVA SYNTAX RULES - INCOMPLETE CODE CAUSES COMPILATION ERRORS:
+
+EVERY CODE BLOCK MUST BE COMPLETE:
+❌ WRONG: @Test method with no closing brace }
+✅ CORRECT: Every @Test method has opening { and closing }
+
+❌ WRONG: Lambda with no closing: () -> { code (missing })
+✅ CORRECT: () -> { code };
+
+❌ WRONG: Method call without semicolon: Calculator.add(2, 3)
+✅ CORRECT: Calculator.add(2, 3);
+
+❌ WRONG: if statement without braces: if (x > 0) return x
+✅ CORRECT: if (x > 0) { return x; }
+
+INDENTATION (Use 4 spaces per level):
+[Column 0] → Package declaration
+[Column 0] → Imports
+[Column 0] → public class CalculatorTest {
+[4 spaces] → @Test annotations and method signatures
+[4 spaces] → Method opening brace {
+[8 spaces] → Code inside methods
+[4 spaces] → Method closing brace }
+[Column 0] → Class closing brace }
+
+MANDATORY STRUCTURE:
+1. Package declaration (if present)
+2. Import statements
+3. public class TestXxx {
+4. ONE @Test annotation per method (on line directly above method)
+5. public void testXxx() { (method signature)
+6. Code with proper indentation
+7. } (close method)
+8. Repeat for all ${TESTS_PER_GENERATION} tests
+9. } (close class)
+
 STRICT SYNTAX RULES:
-1. Use EXACTLY 4 spaces for each indentation level
-2. Package declaration must be first line (if present)
-3. Imports come after package, before class
-4. Every method must have matching opening/closing braces
-5. @Test annotation goes directly above each test method (no blank line)
-6. Each statement inside methods must end with semicolon;
-7. Verify brace count: count({) must equal count(})`,
-            importRule: 'Import JUnit 5 classes first, then static imports, then test class',
-            structureRule: 'Class definition, then @Test methods at 4-space indent, code at 8 spaces',
+1. Every opening { MUST have matching closing }
+2. Every statement inside methods MUST end with semicolon;
+3. @Test annotation on line directly above method (no blank line)
+4. Lambda syntax: () -> { code }; must be complete
+5. Count braces before submitting: opening { === closing }
+
+BEFORE YOU SUBMIT - VERIFY:
+- Count ${TESTS_PER_GENERATION} @Test methods exist
+- Every { has matching }
+- Every statement ends with ;
+- All method bodies are complete
+- No incomplete lambdas or code blocks`,
+            importRule: 'Import JUnit 5 classes first, then static imports - ONE import block at top',
+            structureRule: 'Class at column 0, @Test+methods at 4 spaces, code at 8 spaces - ALL blocks must be complete',
             matcherInfo: 'Use assertEquals(), assertTrue(), assertFalse(), assertThrows(), assertNull()'
         }
     };
@@ -1073,10 +1231,30 @@ function rebuildFullCode(tests: TestCase[], language: string, framework: string)
     
     // Combine based on language
     if (language === 'javascript' || language === 'typescript') {
-        const describeBlock = testBodies.join('\n\n');
-        return imports ? `${imports}\n\n${describeBlock}` : describeBlock;
+        // Enforce ONE import and ONE describe wrapping ALL tests
+        const importLine = imports || "const { } = require('./module');";
+        const cleanedBodies = testBodies.map(body => {
+            return body
+                // drop any stray require/import at the top of the test body
+                .replace(/^\s*(const\s+\{[^}]+\}\s*=\s*require\([^)]*\);?|import\s+[^;]+;?)\s*/m, '')
+                .trim();
+        });
+        const indentedTests = cleanedBodies.map(tb => indentLines(tb, 2)).join('\n\n');
+        return `${importLine}\n\ndescribe('Generated Tests', () => {\n${indentedTests}\n});`;
     } else if (language === 'python') {
-        return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
+        // Rewrap all tests inside a single class to avoid indentation errors
+        const moduleName = 'Generated';
+        const indentedBodies = testBodies.map(body => {
+            return body.split('\n').map(line => {
+                if (line.trim()) {
+                    return '    ' + line.trim();
+                }
+                return '';
+            }).join('\n');
+        }).join('\n\n');
+
+        const classBlock = `class Test${moduleName}:\n${indentedBodies}\n`;
+        return imports ? `${imports}\n\n${classBlock}` : classBlock;
     } else if (language === 'java') {
         return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
     }
@@ -1109,6 +1287,14 @@ function extractImports(code: string, language: string): string {
     }
     
     return importLines.join('\n');
+}
+
+/**
+ * Helper: indent each line by n spaces
+ */
+function indentLines(text: string, spaces: number): string {
+    const pad = ' '.repeat(spaces);
+    return text.split('\n').map(line => line ? pad + line : '').join('\n');
 }
 
 /**
@@ -1282,4 +1468,363 @@ function getDefaultFramework(language: string): string {
     };
     
     return frameworkMap[language] || 'unknown';
+}
+
+/**
+ * SOLUTION 2: Language-specific templates for guaranteed structure
+ */
+function getTestTemplate(language: string, framework: string, moduleName: string): {
+    template: string;
+    placeholder: string;
+} {
+    if (language === 'javascript' || language === 'typescript') {
+        const importSyntax = language === 'javascript' 
+            ? `const { /* functions */ } = require('./${moduleName}');`
+            : `import { /* functions */ } from './${moduleName}';`;
+            
+        return {
+            template: `${importSyntax}
+
+describe('${moduleName} Tests', () => {
+{{TEST_BLOCKS}}
+});
+`,
+            placeholder: '{{TEST_BLOCKS}}'
+        };
+    }
+    
+    if (language === 'python') {
+        return {
+            template: `import pytest
+from ${moduleName} import *
+
+class Test${capitalize(moduleName)}:
+{{TEST_BLOCKS}}
+`,
+            placeholder: '{{TEST_BLOCKS}}'
+        };
+    }
+    
+    if (language === 'java') {
+        return {
+            template: `import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class ${capitalize(moduleName)}Test {
+{{TEST_BLOCKS}}
+}
+`,
+            placeholder: '{{TEST_BLOCKS}}'
+        };
+    }
+    
+    // Default: return code as-is
+    return {
+        template: '{{TEST_BLOCKS}}',
+        placeholder: '{{TEST_BLOCKS}}'
+    };
+}
+
+/**
+ * SOLUTION 7: Post-processor to extract test blocks and rebuild with template
+ */
+export function fixTestStructure(code: string, language: string, framework: string, moduleName: string = 'example'): string {
+    console.log(`[Post-Processor] Fixing ${language} test structure...`);
+    
+    if (language === 'javascript' || language === 'typescript') {
+        return fixJavaScriptStructure(code, language, moduleName);
+    }
+    
+    if (language === 'python') {
+        return fixPythonStructure(code, moduleName);
+    }
+    
+    if (language === 'java') {
+        return fixJavaStructure(code, moduleName);
+    }
+    
+    return code;
+}
+
+/**
+ * Fix JavaScript/TypeScript test structure
+ */
+function fixJavaScriptStructure(code: string, language: string, moduleName: string): string {
+    // Extract import/require statements (should be at top)
+    const importRegex = language === 'javascript'
+        ? /(?:const|let|var)\s+\{[^}]+\}\s*=\s*require\([^)]+\);?/g
+        : /import\s+\{[^}]+\}\s+from\s+['"][^'"]+['"];?/g;
+    
+    const imports = code.match(importRegex) || [];
+    const uniqueImports = [...new Set(imports)]; // Remove duplicates
+    const importStatement = uniqueImports[0] || (language === 'javascript' 
+        ? `const { } = require('./${moduleName}');`
+        : `import { } from './${moduleName}';`);
+    
+    // Extract test() or it() blocks
+    const testRegex = /(?:test|it)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{[\s\S]*?\n\s*\}\s*\);?/g;
+    const tests = code.match(testRegex) || [];
+    
+    if (tests.length === 0) {
+        console.warn('[Post-Processor] No test blocks found in JavaScript code');
+        return code; // Return original if no tests found
+    }
+    
+    // Rebuild with proper structure
+    const indentedTests = tests.map(test => '  ' + test.trim()).join('\n\n');
+    
+    return `${importStatement}
+
+describe('${moduleName} Tests', () => {
+${indentedTests}
+});
+`;
+}
+
+/**
+ * Fix Python test structure
+ */
+function fixPythonStructure(code: string, moduleName: string): string {
+    console.log('[Post-Processor] Fixing Python structure...');
+    
+    // Extract import statements
+    const importRegex = /^(?:import|from)\s+.+$/gm;
+    const imports = code.match(importRegex) || [];
+    const uniqueImports = [...new Set(imports.map(i => i.trim()))];
+    const importStatements = (uniqueImports.join('\n') || `import pytest\nfrom ${moduleName} import *`).trim();
+    
+    // Simple approach: Extract ALL def test_ lines and their bodies
+    const lines = code.split('\n');
+    const testMethods: string[] = [];
+    let currentTest: string[] = [];
+    let inTestMethod = false;
+    let baseIndent = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        
+        // Found a test method definition
+        if (trimmed.startsWith('def test_')) {
+            // Save previous test if exists
+            if (currentTest.length > 0) {
+                testMethods.push(currentTest.join('\n'));
+            }
+            currentTest = [line.trimStart()]; // Remove any existing indentation
+            inTestMethod = true;
+            baseIndent = line.search(/\S/); // Find original indent level
+        } 
+        // Inside a test method
+        else if (inTestMethod) {
+            const currentIndent = line.search(/\S/);
+            
+            // Empty line or continuation of test
+            if (trimmed === '' || currentIndent > baseIndent || trimmed.startsWith('#')) {
+                currentTest.push(line.substring(baseIndent)); // Remove base indent
+            }
+            // New non-test definition or dedent - end of current test
+            else if (trimmed.startsWith('def ') || trimmed.startsWith('class ') || currentIndent <= baseIndent) {
+                testMethods.push(currentTest.join('\n'));
+                currentTest = [];
+                inTestMethod = false;
+            }
+        }
+    }
+    
+    // Save last test
+    if (currentTest.length > 0) {
+        testMethods.push(currentTest.join('\n'));
+    }
+    
+    // Fallback: if no tests found via streaming loop, try a regex catch-all
+    if (testMethods.length === 0) {
+        const fallbackMatches = code.match(/def\s+test_\w+\s*\([^)]*\)\s*:[\s\S]*?(?=^def\s+test_|^class\s+|\Z)/gm) || [];
+        if (fallbackMatches.length > 0) {
+            testMethods.push(...fallbackMatches.map(t => t.trimStart()));
+        }
+    }
+    
+    if (testMethods.length === 0) {
+        console.warn('[Post-Processor] No test methods found in Python code');
+        return `${importStatements}\n\nclass Test${capitalize(moduleName)}:\n    def test_placeholder(self):\n        assert True\n`;
+    }
+    
+    console.log(`[Post-Processor] Found ${testMethods.length} test methods`);
+    
+    // Check if any test has 'self' parameter
+    const hasClassMethods = testMethods.some(test => /def\s+test_\w+\s*\(\s*self\s*[,)]/.test(test));
+    
+    if (hasClassMethods || testMethods.length > 0) {
+        // ALWAYS wrap in class if we have test methods
+        // Re-indent everything: methods at 4 spaces, code at 8+ spaces
+        const indentedTests = testMethods.map(test => {
+            const lines = test.split('\n');
+            return lines.map((line, idx) => {
+                if (idx === 0) {
+                    // Method definition: 4 spaces
+                    return '    ' + line.trim();
+                } else if (line.trim()) {
+                    // Method body: 8 spaces (or more for nested blocks)
+                    const trimmed = line.trimStart();
+                    const extraIndent = line.length - line.trimStart().length;
+                    return '        ' + '    '.repeat(Math.floor(extraIndent / 4)) + trimmed;
+                }
+                return ''; // Empty line
+            }).join('\n');
+        }).join('\n\n');
+        
+        return `${importStatements}
+
+class Test${capitalize(moduleName)}:
+${indentedTests}
+`;
+    } else {
+        // Standalone functions (rare case)
+        return `${importStatements}
+
+${testMethods.join('\n\n')}
+`;
+    }
+}
+
+/**
+ * Fix Java test structure
+ */
+function fixJavaStructure(code: string, moduleName: string): string {
+    // Extract imports
+    const importRegex = /^import\s+.+;$/gm;
+    const imports = code.match(importRegex) || [];
+    const uniqueImports = [...new Set(imports)];
+    const importStatements = uniqueImports.join('\n') || 
+        `import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;`;
+    
+    // Extract test methods (@Test annotation + method)
+    const testRegex = /@Test[\s\S]*?(?:public|private|protected)?\s+void\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\}/g;
+    const tests = code.match(testRegex) || [];
+    
+    if (tests.length === 0) {
+        console.warn('[Post-Processor] No test methods found in Java code');
+        return code;
+    }
+    
+    // Indent tests (4 spaces for class methods)
+    const indentedTests = tests.map(test => {
+        return test.split('\n').map(line => '    ' + line).join('\n');
+    }).join('\n\n');
+    
+    return `${importStatements}
+
+public class ${capitalize(moduleName)}Test {
+${indentedTests}
+}
+`;
+}
+
+/**
+ * SOLUTION 1: Validate test structure (basic syntax check)
+ */
+export function validateTestStructure(code: string, language: string): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    
+    if (language === 'javascript' || language === 'typescript') {
+        // Check for balanced braces
+        const openBraces = (code.match(/\{/g) || []).length;
+        const closeBraces = (code.match(/\}/g) || []).length;
+        if (openBraces !== closeBraces) {
+            errors.push(`Unbalanced braces: ${openBraces} opening, ${closeBraces} closing`);
+        }
+        
+        // Check for describe block
+        if (!code.includes('describe(')) {
+            errors.push('Missing describe() wrapper block');
+        }
+        
+        // Check for test blocks
+        const testCount = (code.match(/(?:test|it)\s*\(/g) || []).length;
+        if (testCount === 0) {
+            errors.push('No test() blocks found');
+        }
+        
+        // Check for multiple require/import statements
+        const requireCount = (code.match(/require\s*\(/g) || []).length;
+        const importCount = (code.match(/^import\s+/gm) || []).length;
+        if (requireCount > 1 || importCount > 1) {
+            errors.push(`Multiple import statements found (${requireCount + importCount}). Should have only ONE at top.`);
+        }
+    }
+    
+    if (language === 'python') {
+        // Check for class definition if methods have 'self'
+        if (code.includes('def test_') && code.includes('(self')) {
+            if (!code.includes('class Test')) {
+                errors.push('Test methods with "self" parameter but no class definition found');
+            }
+        }
+        
+        // Check for proper indentation (basic check)
+        const lines = code.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.trim().startsWith('def test_')) {
+                const indent = line.search(/\S/);
+                if (code.includes('class Test') && indent !== 4) {
+                    errors.push(`Line ${i + 1}: Test method should be indented with 4 spaces inside class`);
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (language === 'java') {
+        // Check for class definition
+        if (!code.includes('public class') && !code.includes('class ')) {
+            errors.push('No class definition found');
+        }
+        
+        // Check for @Test annotations
+        const testCount = (code.match(/@Test/g) || []).length;
+        if (testCount === 0) {
+            errors.push('No @Test annotations found');
+        }
+    }
+    
+    return {
+        valid: errors.length === 0,
+        errors
+    };
+}
+
+/**
+ * Helper: Capitalize first letter
+ */
+function capitalize(str: string): string {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+/**
+ * Extract module name from code for template generation
+ */
+function extractModuleName(code: string, language: string): string {
+    // Try to extract from class/function names
+    if (language === 'javascript' || language === 'typescript') {
+        // Look for class or function exports
+        const classMatch = code.match(/(?:export\s+)?class\s+(\w+)/);
+        if (classMatch) return classMatch[1];
+        
+        const functionMatch = code.match(/(?:export\s+)?function\s+(\w+)/);
+        if (functionMatch) return functionMatch[1];
+    }
+    
+    if (language === 'python') {
+        const classMatch = code.match(/class\s+(\w+)/);
+        if (classMatch) return classMatch[1];
+    }
+    
+    if (language === 'java') {
+        const classMatch = code.match(/public\s+class\s+(\w+)/);
+        if (classMatch) return classMatch[1];
+    }
+    
+    // Default fallback
+    return 'module';
 }
