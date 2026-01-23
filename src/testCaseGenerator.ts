@@ -6,38 +6,134 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { ExtensionConfig, GeneratedTests, SupportedLanguage, TestCase } from './types';
 
+// Configuration constants
+const TESTS_PER_GENERATION = 12; // Number of tests to generate per request
+const MAX_RETRIES = 2; // Maximum API retry attempts
+
 /**
- * Main function to generate tests using configured AI provider
+ * Main function to generate tests using configured AI provider with retry and variation logic
+ * 
+ * APPROACH 1: Always generate exactly 12 tests per call
+ * APPROACH 2: Pass context-aware prompt with previous test descriptions
+ * APPROACH 3: Deduplicate against ALL historical tests using Levenshtein distance
  */
 export async function generateTests(
     code: string,
     language: SupportedLanguage,
     config: ExtensionConfig,
-    framework?: string
+    framework?: string,
+    existingTests?: TestCase[]
 ): Promise<GeneratedTests> {
-    // Determine framework if not provided
     const testFramework = framework || getDefaultFramework(language);
     
-    let aiResponse: string;
+    let allUniqueTests: TestCase[] = [];
+    let allExistingTests = existingTests || [];
+    let totalDuplicatesRemoved = 0;
+    let variationsGenerated = 0;
+    let totalApiCalls = 0;
     
     try {
-        // Generate tests based on provider
-        if (config.apiProvider === 'anthropic') {
-            aiResponse = await generateWithClaude(code, language, testFramework, config);
-        } else {
-            aiResponse = await generateWithGemini(code, language, testFramework, config);
+        // PHASE 1: Collect results from MAX 2 API calls
+        const apiResults: { tests: TestCase[]; rawCount: number; yieldPercent: number }[] = [];
+        
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            totalApiCalls++;
+            console.log(`\n[Attempt ${totalApiCalls}] Calling AI...`);
+            
+            // Generate tests based on provider (APPROACH 2: Pass historical context)
+            let aiResponse: string;
+            if (config.apiProvider === 'anthropic') {
+                aiResponse = await generateWithClaude(code, language, testFramework, config, allExistingTests);
+            } else {
+                aiResponse = await generateWithGemini(code, language, testFramework, config, allExistingTests);
+            }
+            
+            // Parse the response
+            const parsed = parseTestCases(aiResponse, language, testFramework);
+            
+            // APPROACH 3: Deduplicate against ALL existing tests
+            const deduplicationResult = deduplicateTests(parsed.testCases, allExistingTests);
+            const newUniqueTests = deduplicationResult.uniqueTests;
+            
+            // Track deduplication
+            totalDuplicatesRemoved += deduplicationResult.duplicateCount;
+            const yieldPercent = (newUniqueTests.length / parsed.testCases.length) * 100;
+            
+            apiResults.push({
+                tests: newUniqueTests,
+                rawCount: parsed.testCases.length,
+                yieldPercent: yieldPercent
+            });
+            
+            console.log(`[Attempt ${totalApiCalls}] Generated ${parsed.testCases.length}, Got ${newUniqueTests.length} unique (${Math.round(yieldPercent)}% yield)`);
+            
+            // Add to our collection
+            allUniqueTests.push(...newUniqueTests);
+            allExistingTests = [...allExistingTests, ...newUniqueTests];
+            
+            // Do not stop early; complete both attempts to compute yield
         }
         
-        // Parse the response
-        const tests = parseTestCases(aiResponse, language, testFramework);
+        // PHASE 2: Calculate yield for diagnostics
+        const averageYield = apiResults.reduce((sum, r) => sum + r.yieldPercent, 0) / apiResults.length;
+        console.log(`\n[Yield Analysis] Average yield: ${Math.round(averageYield)}% across ${totalApiCalls} API calls`);
+        
+        // PHASE 3: Fill remaining tests with variations if we're short of 12
+        if (allUniqueTests.length < TESTS_PER_GENERATION) {
+            const needed = TESTS_PER_GENERATION - allUniqueTests.length;
+            console.log(`\n[Variations] Need ${needed} more tests - generating rule-based variations...`);
+            
+            // Use full history as source for variations
+            const sourceTests = allExistingTests.length > 0 ? allExistingTests : allUniqueTests;
+            if (sourceTests.length > 0) {
+                const variations = generateVariations(sourceTests, needed, language, allExistingTests);
+                variationsGenerated = variations.length;
+                allUniqueTests.push(...variations);
+                console.log(`[Variations] Generated ${variationsGenerated} variations`);
+                
+                // Add variations to historical tracking for next round
+                allExistingTests = [...allExistingTests, ...variations];
+            }
+        }
+        
+        // PHASE 4: Ensure exactly 12 tests (trim if over)
+        const finalTests = allUniqueTests.slice(0, TESTS_PER_GENERATION);
+        console.log(`\n[Final] Returning ${finalTests.length} tests (${totalApiCalls} API calls, ${variationsGenerated} variations)`);
+        
+        // Rebuild full code from final tests
+        const fullCode = rebuildFullCode(finalTests, language, testFramework);
         
         // Validate generated tests
-        const validation = validateGeneratedTests(tests);
+        const validation = validateGeneratedTests({ 
+            language, 
+            framework: testFramework, 
+            testCases: finalTests, 
+            imports: '', 
+            fullCode, 
+            timestamp: Date.now() 
+        });
+        
         if (!validation.valid) {
             console.warn('Generated tests have issues:', validation.issues);
         }
         
-        return tests;
+        // Return with accurate metadata
+        return {
+            language,
+            framework: testFramework,
+            testCases: finalTests,
+            imports: extractImports(fullCode, language),
+            fullCode,
+            timestamp: Date.now(),
+            metadata: {
+                duplicatesRemoved: totalDuplicatesRemoved,
+                totalGenerated: TESTS_PER_GENERATION,
+                uniqueTests: finalTests.length,
+                aiGenerated: allUniqueTests.length - variationsGenerated,
+                variationsGenerated: variationsGenerated,
+                attempts: totalApiCalls
+            }
+        };
     } catch (error: any) {
         console.error('Test generation error:', error);
         console.error('Error status:', error.status);
@@ -68,13 +164,14 @@ async function generateWithClaude(
     code: string,
     language: string,
     framework: string,
-    config: ExtensionConfig
+    config: ExtensionConfig,
+    existingTests?: TestCase[]
 ): Promise<string> {
     const anthropic = new Anthropic({
         apiKey: config.apiKey
     });
     
-    const prompt = buildTestPrompt(code, language, framework);
+    const prompt = buildTestPrompt(code, language, framework, existingTests);
     
     const message = await anthropic.messages.create({
         model: config.model || 'claude-sonnet-4-20250514',
@@ -104,7 +201,8 @@ async function generateWithGemini(
     code: string,
     language: string,
     framework: string,
-    config: ExtensionConfig
+    config: ExtensionConfig,
+    existingTests?: TestCase[]
 ): Promise<string> {
     const genAI = new GoogleGenerativeAI(config.apiKey);
     const model = genAI.getGenerativeModel({
@@ -115,47 +213,100 @@ async function generateWithGemini(
         }
     });
     
-    const prompt = buildTestPrompt(code, language, framework);
+    const prompt = buildTestPrompt(code, language, framework, existingTests);
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
 }
 
 /**
- * Build optimized prompt for test generation
+ * Build optimized prompt for test generation with APPROACH 2 (Context Awareness)
  */
-function buildTestPrompt(code: string, language: string, framework: string): string {
+function buildTestPrompt(
+    code: string, 
+    language: string, 
+    framework: string, 
+    existingTests?: TestCase[]
+): string {
     const languageSpecificInstructions = getLanguageSpecificInstructions(language, framework);
     
-    return `You are an expert software testing engineer. Generate comprehensive, RUNNABLE unit tests for the following ${language} code.
+    // APPROACH 2: Build context-aware prompt with previous test descriptions
+    let existingTestsContext = '';
+    if (existingTests && existingTests.length > 0) {
+        const testDescriptions = existingTests.map(t => {
+            // Include test type for better context
+            return `- "${t.name}" (${t.type}): This test already covers this scenario`;
+        }).join('\n');
+        
+        existingTestsContext = `\n\n### EXISTING TESTS - DO NOT DUPLICATE
+The following ${existingTests.length} tests have already been generated. These test SPECIFIC scenarios and patterns.
+Generate COMPLETELY DIFFERENT tests that cover aspects NOT covered by these:
+
+${testDescriptions}
+
+IMPORTANT:
+- Avoid similar test names, descriptions, and test logic
+- Cover different edge cases, boundaries, and error conditions
+- Use different input values and scenarios
+- Generate tests for different function behaviors or error types
+
+Generate ${TESTS_PER_GENERATION} NEW and UNIQUE tests.`;
+    } else {
+        existingTestsContext = `\n\nGenerate EXACTLY ${TESTS_PER_GENERATION} diverse and comprehensive tests.`;
+    }
+    
+    return `🚨 MANDATORY REQUIREMENT: YOU MUST GENERATE EXACTLY ${TESTS_PER_GENERATION} TEST CASES 🚨
+
+You are an expert software testing engineer. Your task is to generate EXACTLY ${TESTS_PER_GENERATION} comprehensive, RUNNABLE unit tests.
+
+ABSOLUTE RULE: ${TESTS_PER_GENERATION} TESTS REQUIRED
+- NOT ${TESTS_PER_GENERATION - 9} tests
+- NOT ${TESTS_PER_GENERATION - 6} tests  
+- NOT ${TESTS_PER_GENERATION - 3} tests
+- NOT ${TESTS_PER_GENERATION - 1} tests
+- EXACTLY ${TESTS_PER_GENERATION} TESTS
 
 CODE TO TEST:
 \`\`\`${language}
 ${code}
 \`\`\`
+${existingTestsContext}
 
-CRITICAL REQUIREMENTS FOR ${framework.toUpperCase()}:
-1. **Import ALL dependencies ONLY ONCE at the very top** - DO NOT repeat imports
-2. **${languageSpecificInstructions.wrapperRequirement}**
-3. **Use correct module path** - ${languageSpecificInstructions.importExample}
-4. **Generate 5-8 different test cases covering:**
-   - Normal scenarios (2-3 tests)
-   - Edge cases (boundary values, empty, null) (2-3 tests)
-   - Error cases (invalid inputs, exceptions) (1-2 tests)
-5. **Each test must be independent and runnable**
-6. **Use proper ${framework} syntax and matchers**
-7. **${languageSpecificInstructions.organizationTip}**
+📋 MANDATORY TEST COUNT BREAKDOWN (MUST TOTAL ${TESTS_PER_GENERATION}):
+✓ Normal scenarios: 5-6 tests (typical valid inputs)
+✓ Edge cases: 4-5 tests (boundary values, empty, null, large values)
+✓ Error cases: 2-3 tests (invalid inputs, exceptions)
+= TOTAL: EXACTLY ${TESTS_PER_GENERATION} TESTS
+
+REQUIREMENTS:
+1. Import ALL dependencies ONLY ONCE at the very top — DO NOT repeat imports
+2. ${languageSpecificInstructions.wrapperRequirement}
+3. Use correct module path — ${languageSpecificInstructions.importExample}
+4. Generate EXACTLY ${TESTS_PER_GENERATION} test cases (see breakdown above)
+5. Each test must be independent and runnable
+6. Use proper ${framework} syntax and matchers
+7. ${languageSpecificInstructions.organizationTip}
 
 ${languageSpecificInstructions.exampleCode}
 
-CRITICAL:
+CRITICAL SYNTAX VALIDATION RULES:
 - ${languageSpecificInstructions.importRule}
 - ${languageSpecificInstructions.structureRule}
 - NO explanatory text before/after code
 - COMPLETE, RUNNABLE code only
 - ${languageSpecificInstructions.matcherInfo}
 
-Generate the tests now:`;
+🔢 FINAL VERIFICATION CHECKLIST (COMPLETE BEFORE RETURNING):
+□ Step 1: Count how many test() or it() blocks you wrote
+□ Step 2: If count < ${TESTS_PER_GENERATION}: GO BACK and add more tests until you reach ${TESTS_PER_GENERATION}
+□ Step 3: If count > ${TESTS_PER_GENERATION}: GO BACK and remove excess tests to get exactly ${TESTS_PER_GENERATION}
+□ Step 4: Verify count === ${TESTS_PER_GENERATION} (THIS IS MANDATORY)
+□ Step 5: Check syntax validity (brackets, indentation, semicolons)
+□ Step 6: Only NOW return your code
+
+DO NOT RETURN CODE UNTIL YOU HAVE VERIFIED ${TESTS_PER_GENERATION} TESTS EXIST.
+
+Generate your ${TESTS_PER_GENERATION} tests now:`;
 }
 
 /**
@@ -172,29 +323,92 @@ function getLanguageSpecificInstructions(language: string, framework: string): {
 } {
     const instructions: { [key: string]: any } = {
         'javascript': {
-            wrapperRequirement: 'Wrap all tests in a single describe() block',
+            wrapperRequirement: 'Wrap ALL ${TESTS_PER_GENERATION} tests in a SINGLE describe() block',
             importExample: 'If testing example.js, use require(\'./example\')',
             organizationTip: 'Use nested describe blocks for better organization',
-            exampleCode: `EXACT STRUCTURE (Jest example):
+            exampleCode: `⚠️ CRITICAL: You MUST generate EXACTLY ${TESTS_PER_GENERATION} test() blocks, NOT 2, NOT 5, EXACTLY ${TESTS_PER_GENERATION}!
+
+EXACT STRUCTURE (Jest - ${TESTS_PER_GENERATION} tests required):
 \`\`\`javascript
 const { add, divide, findMax } = require('./example');
 
 describe('Example Functions', () => {
-  describe('add function', () => {
-    test('should add two positive numbers', () => {
-      expect(add(2, 3)).toBe(5);
-    });
+  // Test 1
+  test('should add two positive numbers', () => {
+    expect(add(2, 3)).toBe(5);
   });
   
-  describe('divide function', () => {
-    test('should throw error on division by zero', () => {
-      expect(() => divide(5, 0)).toThrow();
-    });
+  // Test 2
+  test('should add positive and negative numbers', () => {
+    expect(add(5, -2)).toBe(3);
+  });
+  
+  // Test 3
+  test('should add two negative numbers', () => {
+    expect(add(-5, -3)).toBe(-8);
+  });
+  
+  // Test 4
+  test('should add floating point numbers', () => {
+    expect(add(2.5, 3.5)).toBe(6);
+  });
+  
+  // Test 5
+  test('should divide two positive numbers', () => {
+    expect(divide(10, 2)).toBe(5);
+  });
+  
+  // Test 6
+  test('should divide negative by positive', () => {
+    expect(divide(-10, 2)).toBe(-5);
+  });
+  
+  // Test 7
+  test('should return zero dividing zero by non-zero', () => {
+    expect(divide(0, 5)).toBe(0);
+  });
+  
+  // Test 8
+  test('should throw error on division by zero', () => {
+    expect(() => divide(5, 0)).toThrow();
+  });
+  
+  // Test 9
+  test('should find max in positive array', () => {
+    expect(findMax([1, 5, 2, 8, 3])).toBe(8);
+  });
+  
+  // Test 10
+  test('should find max in mixed array', () => {
+    expect(findMax([-1, 5, -8, 2, 0])).toBe(5);
+  });
+  
+  // Test 11
+  test('should return null for empty array', () => {
+    expect(findMax([])).toBeNull();
+  });
+  
+  // Test 12
+  test('should return single element for one-element array', () => {
+    expect(findMax([7])).toBe(7);
   });
 });
-\`\`\``,
-            importRule: 'ONE import/require statement at top',
-            structureRule: 'ONE main describe block wrapping everything',
+\`\`\`
+
+⚠️ COUNT YOUR TESTS: The example above has EXACTLY 12 test() blocks numbered Test 1 through Test 12. YOU MUST DO THE SAME!
+
+STRICT SYNTAX RULES:
+1. ONE require() statement at the very top - NO duplicates
+2. ONE describe() block wrapping ALL ${TESTS_PER_GENERATION} tests
+3. EXACTLY ${TESTS_PER_GENERATION} test() blocks inside describe
+4. Use EXACTLY 2 spaces for each indentation level
+5. Every opening { must have matching closing }
+6. Every statement inside test must end with semicolon;
+7. Close describe with }); at the end
+8. NO test() blocks outside of describe()
+9. Verify: count(test() blocks) === ${TESTS_PER_GENERATION} before returning`,
+            importRule: 'ONE require() statement at top - NO duplicate require() anywhere',
+            structureRule: 'ONE describe block with EXACTLY ${TESTS_PER_GENERATION} test() blocks inside - NO orphan test() blocks',
             matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow(), .toBeNull()'
         },
         'typescript': {
@@ -212,39 +426,79 @@ describe('Example Functions', () => {
     });
   });
 });
-\`\`\``,
-            importRule: 'ONE import statement at top',
-            structureRule: 'ONE main describe block wrapping everything',
+\`\`\`
+
+STRICT SYNTAX RULES:
+1. Use EXACTLY 2 spaces for each indentation level
+2. Every opening brace { must have matching closing brace }
+3. Import statement must be valid ES6 syntax with semicolon
+4. All statements inside test must end with semicolon;
+5. Verify bracket count: count({) must equal count(})`,
+            importRule: 'ONE import statement at top - NO duplicate imports',
+            structureRule: 'ONE main describe block wrapping everything - proper bracket matching',
             matcherInfo: 'Use appropriate matchers: .toBe(), .toEqual(), .toThrow()'
         },
         'python': {
             wrapperRequirement: 'Wrap all tests in a test class or use separate test functions',
             importExample: 'If testing example.py, use from example import add, divide',
             organizationTip: 'Group related tests in test classes',
-            exampleCode: `EXACT STRUCTURE (Pytest example):
-\`\`\`python
-from example import add, divide, find_max
-import pytest
+                exampleCode: `EXACT STRUCTURE (Pytest example):
+    \`\`\`python
+    from example import add, divide, find_max
+    import pytest
 
-class TestCalculator:
-    def test_add_positive_numbers(self):
-        assert add(2, 3) == 5
+    class TestCalculator:
+        def test_add_positive_numbers(self):
+            assert add(2, 3) == 5
     
-    def test_add_negative_numbers(self):
-        assert add(-1, -2) == -3
+        def test_add_negative_numbers(self):
+            assert add(-1, -2) == -3
     
-    def test_divide_normal(self):
-        assert divide(6, 3) == 2
+        def test_divide_normal(self):
+            assert divide(6, 3) == 2
     
-    def test_divide_by_zero_raises_error(self):
-        with pytest.raises(ValueError):
-            divide(5, 0)
+        def test_divide_by_zero_raises_error(self):
+            with pytest.raises(ValueError):
+                divide(5, 0)
     
-    def test_find_max_normal(self):
-        assert find_max([1, 5, 3]) == 5
-\`\`\``,
-            importRule: 'ONE import statement at top: from module import functions',
-            structureRule: 'Use test class or separate test functions with test_ prefix',
+        def test_find_max_normal(self):
+            assert find_max([1, 5, 3]) == 5
+    \`\`\`
+
+    🚨 CRITICAL PYTHON INDENTATION RULES (MOST COMMON ERROR - READ CAREFULLY):
+
+    INDENTATION LEVELS (Use SPACES, never TABS):
+    [Column 0] → Imports and class definition
+    [4 spaces] → Method definitions (def test_...)
+    [8 spaces] → Code inside methods (assert, with, etc.)
+    [12 spaces] → Code inside nested blocks (inside with/for/if)
+
+    STEP-BY-STEP CHECKLIST:
+    1. ✓ Imports start at column 0 (NO spaces before 'from' or 'import')
+    2. ✓ Blank line after imports
+    3. ✓ 'class TestCalculator:' starts at column 0 (NO spaces before 'class')
+    4. ✓ Each 'def test_...' line starts with EXACTLY 4 spaces
+    5. ✓ Code inside each method starts with EXACTLY 8 spaces
+    6. ✓ 'with pytest.raises():' line has 8 spaces, code inside has 12 spaces
+    7. ✓ Use ONLY spaces (press spacebar 4 times, never press TAB key)
+    8. ✓ Count spaces visually: 0, 4, 8, 12, 16... (multiples of 4 only)
+
+    COMMON MISTAKES TO AVOID:
+    ❌ WRONG: Adding spaces before 'class TestCalculator:'
+    ❌ WRONG: Using 2 or 3 spaces instead of 4
+    ❌ WRONG: Mixing tabs and spaces
+    ❌ WRONG: Forgetting to indent method bodies
+    ✅ CORRECT: class at 0, def at 4, code at 8
+
+    BEFORE YOU SUBMIT - VERIFY EACH LINE:
+    Line 1: from... (0 spaces) ✓
+    Line 2: import... (0 spaces) ✓
+    Line 3: blank
+    Line 4: class TestCalculator: (0 spaces) ✓
+    Line 5:     def test_... (4 spaces) ✓
+    Line 6:         assert... (8 spaces) ✓`,
+                importRule: 'Import statements at column 0 with ZERO indentation',
+                structureRule: 'class at column 0, def at 4 spaces, code at 8+ spaces - NO EXCEPTIONS',
             matcherInfo: 'Use assert statements and pytest.raises() for exceptions'
         },
         'java': {
@@ -286,9 +540,18 @@ public class CalculatorTest {
         assertEquals(5, Calculator.findMax(new int[]{1, 5, 3}));
     }
 }
-\`\`\``,
-            importRule: 'Import JUnit 5 classes (org.junit.jupiter.api.*) and class under test',
-            structureRule: 'Create test class with @Test methods, use assertThrows() for exceptions',
+\`\`\`
+
+STRICT SYNTAX RULES:
+1. Use EXACTLY 4 spaces for each indentation level
+2. Package declaration must be first line (if present)
+3. Imports come after package, before class
+4. Every method must have matching opening/closing braces
+5. @Test annotation goes directly above each test method (no blank line)
+6. Each statement inside methods must end with semicolon;
+7. Verify brace count: count({) must equal count(})`,
+            importRule: 'Import JUnit 5 classes first, then static imports, then test class',
+            structureRule: 'Class definition, then @Test methods at 4-space indent, code at 8 spaces',
             matcherInfo: 'Use assertEquals(), assertTrue(), assertFalse(), assertThrows(), assertNull()'
         }
     };
@@ -646,6 +909,331 @@ function determineTestType(testName: string): 'normal' | 'edge' | 'error' {
  */
 function generateId(): string {
     return `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Generate variations of existing tests by modifying input values
+ */
+function generateVariations(
+    existingTests: TestCase[],
+    count: number,
+    language: string,
+    allExistingTests: TestCase[]
+): TestCase[] {
+    const variations: TestCase[] = [];
+    const usedTests = new Set<string>();
+    
+    // Shuffle existing tests to get random selection
+    const shuffled = [...existingTests].sort(() => Math.random() - 0.5);
+    
+    for (let i = 0; i < shuffled.length && variations.length < count; i++) {
+        const original = shuffled[i];
+        
+        // Skip if already used
+        if (usedTests.has(original.id)) {
+            continue;
+        }
+        
+        // Generate variation
+        const variation = createTestVariation(original, language);
+        
+        // Check if variation is truly unique (not duplicate of existing)
+        const isDuplicate = allExistingTests.some(existing => 
+            isSimilarTest(variation, existing)
+        );
+        
+        if (!isDuplicate) {
+            variations.push(variation);
+            usedTests.add(original.id);
+        }
+    }
+    
+    return variations;
+}
+
+/**
+ * Create a variation of a test by modifying input values
+ */
+/**
+ * Create a variation of a test by modifying input values semantically
+ * Preserves test type (normal/edge/error) and semantic correctness
+ */
+function createTestVariation(original: TestCase, language: string): TestCase {
+    let variedCode = original.code;
+    let variedName = original.name;
+    
+    // Preserve test type information in naming
+    const testType = original.type; // 'normal', 'edge', or 'error'
+    
+    // SEMANTIC CORRECTNESS: Preserve error test semantics
+    if (testType === 'error') {
+        // For error tests, change input values but maintain error trigger
+        // e.g., "divide(10, 0)" → "divide(50, 0)" (still triggers error)
+        variedCode = variedCode.replace(/\b(\d+)\b/g, (match, offset, str) => {
+            // Check if this number is likely a divisor or error trigger
+            const beforeMatch = str.substring(0, offset).toLowerCase();
+            const isErrorTrigger = beforeMatch.includes('0') || beforeMatch.includes('null') || beforeMatch.includes('empty');
+            
+            if (isErrorTrigger && parseInt(match) === 0) {
+                return '0'; // Keep zero for error cases
+            }
+            
+            const num = parseInt(match);
+            if (num === 0) return '0'; // Preserve zeros
+            
+            const factor = Math.floor(Math.random() * 4) + 2; // 2-5x
+            return String(Math.max(1, num * factor));
+        });
+    } else {
+        // For normal/edge tests, vary numbers more freely
+        variedCode = variedCode.replace(/\b(\d+)\b/g, (match) => {
+            const num = parseInt(match);
+            if (num === 0) return '0'; // Don't change 0s in non-error cases (could be indices)
+            const factor = Math.floor(Math.random() * 4) + 2; // 2-5
+            return String(num * factor);
+        });
+    }
+    
+    // String variations - replace common test strings
+    const stringReplacements: { [key: string]: string[] } = {
+        'hello': ['world', 'test', 'sample', 'demo'],
+        'test': ['demo', 'example', 'sample', 'check'],
+        'foo': ['bar', 'baz', 'qux', 'xyz'],
+        'name': ['title', 'label', 'tag', 'value'],
+        'john': ['jane', 'bob', 'alice', 'charlie'],
+        'email': ['mail', 'address', 'contact', 'inbox']
+    };
+    
+    for (const [origStr, replacements] of Object.entries(stringReplacements)) {
+        const regex = new RegExp(`\\b${origStr}\\b`, 'gi');
+        if (regex.test(variedCode)) {
+            const replacement = replacements[Math.floor(Math.random() * replacements.length)];
+            variedCode = variedCode.replace(regex, replacement);
+        }
+    }
+    
+    // Array variations - change values while maintaining type
+    variedCode = variedCode.replace(/\[([^\]]+)\]/g, (match, content) => {
+        const items = content.split(',').map((s: string) => s.trim());
+        if (items.length > 0 && items[0].match(/^\d+$/)) {
+            // Numeric array - regenerate with different values (2-5x multiplier)
+            const newItems = items.map((item: string) => {
+                const num = parseInt(item);
+                return String(num * (Math.floor(Math.random() * 4) + 2));
+            });
+            return `[${newItems.join(', ')}]`;
+        }
+        return match;
+    });
+    
+    // Update test name with variation marker
+    variedName = variedName.replace(/\b(\d+)\b/g, (match) => {
+        const num = parseInt(match);
+        if (num === 0) return '0';
+        return String(num * (Math.floor(Math.random() * 3) + 2));
+    });
+    
+    // Add subtle variation indicator to name
+    if (!variedName.includes('variant') && !variedName.includes('v2') && !variedName.includes('v3')) {
+        const versionMarkers = ['v2', 'variant', 'alternative'];
+        variedName = `${variedName} (${versionMarkers[Math.floor(Math.random() * versionMarkers.length)]})`;
+    }
+    
+    return {
+        ...original,
+        id: generateId(),
+        name: variedName,
+        code: variedCode,
+        type: testType  // Preserve test type
+    };
+}
+
+/**
+ * Rebuild full test code from test cases
+ */
+function rebuildFullCode(tests: TestCase[], language: string, framework: string): string {
+    if (tests.length === 0) {
+        return '';
+    }
+    
+    // Get imports from first test (they should all have same imports)
+    const firstTest = tests[0];
+    const importMatch = firstTest.code.match(/^(import .+?;|const .+? = require.+?;|from .+? import .+)/m);
+    const imports = importMatch ? importMatch[0] : '';
+    
+    // Extract test bodies
+    const testBodies = tests.map(t => {
+        // Remove imports from individual tests
+        let body = t.code;
+        if (importMatch) {
+            body = body.replace(importMatch[0], '').trim();
+        }
+        return body;
+    });
+    
+    // Combine based on language
+    if (language === 'javascript' || language === 'typescript') {
+        const describeBlock = testBodies.join('\n\n');
+        return imports ? `${imports}\n\n${describeBlock}` : describeBlock;
+    } else if (language === 'python') {
+        return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
+    } else if (language === 'java') {
+        return imports ? `${imports}\n\n${testBodies.join('\n\n')}` : testBodies.join('\n\n');
+    }
+    
+    return testBodies.join('\n\n');
+}
+
+/**
+ * Extract imports from code
+ */
+function extractImports(code: string, language: string): string {
+    const lines = code.split('\n');
+    const importLines: string[] = [];
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (language === 'javascript' || language === 'typescript') {
+            if (trimmed.startsWith('import ') || trimmed.startsWith('const ') && trimmed.includes('require(')) {
+                importLines.push(line);
+            }
+        } else if (language === 'python') {
+            if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+                importLines.push(line);
+            }
+        } else if (language === 'java') {
+            if (trimmed.startsWith('import ')) {
+                importLines.push(line);
+            }
+        }
+    }
+    
+    return importLines.join('\n');
+}
+
+/**
+ * Deduplicate test cases by comparing with existing tests
+ * Returns unique tests and count of duplicates removed
+ */
+export function deduplicateTests(
+    newTests: TestCase[],
+    existingTests: TestCase[]
+): { uniqueTests: TestCase[]; duplicateCount: number } {
+    if (!existingTests || existingTests.length === 0) {
+        return { uniqueTests: newTests, duplicateCount: 0 };
+    }
+    
+    const uniqueTests: TestCase[] = [];
+    let duplicateCount = 0;
+    
+    // Build existing test signatures for comparison
+    const existingSignatures = new Set(
+        existingTests.map(t => normalizeTestSignature(t))
+    );
+    
+    for (const newTest of newTests) {
+        const newSignature = normalizeTestSignature(newTest);
+        
+        // Check for exact match
+        if (existingSignatures.has(newSignature)) {
+            duplicateCount++;
+            continue;
+        }
+        
+        // Check for similar tests using fuzzy matching
+        let isDuplicate = false;
+        for (const existingTest of existingTests) {
+            if (isSimilarTest(newTest, existingTest)) {
+                duplicateCount++;
+                isDuplicate = true;
+                break;
+            }
+        }
+        
+        if (!isDuplicate) {
+            uniqueTests.push(newTest);
+            existingSignatures.add(newSignature);
+        }
+    }
+    
+    return { uniqueTests, duplicateCount };
+}
+
+/**
+ * Normalize test signature for comparison
+ */
+function normalizeTestSignature(test: TestCase): string {
+    const name = (test.name || '').toLowerCase().trim();
+    return name;
+}
+
+/**
+ * Check if two tests are similar using fuzzy matching
+ */
+function isSimilarTest(test1: TestCase, test2: TestCase): boolean {
+    const name1 = (test1.name || '').toLowerCase().replace(/[_\s-]/g, '');
+    const name2 = (test2.name || '').toLowerCase().replace(/[_\s-]/g, '');
+    
+    // Exact name match (after normalization)
+    if (name1 === name2 && name1.length > 0) {
+        return true;
+    }
+    
+    // Check if names are very similar (>80% similarity)
+    const similarity = calculateStringSimilarity(name1, name2);
+    if (similarity > 0.8) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Calculate string similarity using Levenshtein distance
+ * Returns value between 0 (completely different) and 1 (identical)
+ */
+function calculateStringSimilarity(str1: string, str2: string): number {
+    if (str1 === str2) return 1.0;
+    if (str1.length === 0 || str2.length === 0) return 0.0;
+    
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 1.0;
+    
+    const editDistance = levenshteinDistance(longer, shorter);
+    return (longer.length - editDistance) / longer.length;
+}
+
+/**
+ * Calculate Levenshtein distance between two strings
+ */
+function levenshteinDistance(str1: string, str2: string): number {
+    const matrix: number[][] = [];
+    
+    for (let i = 0; i <= str2.length; i++) {
+        matrix[i] = [i];
+    }
+    
+    for (let j = 0; j <= str1.length; j++) {
+        matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= str2.length; i++) {
+        for (let j = 1; j <= str1.length; j++) {
+            if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1, // substitution
+                    matrix[i][j - 1] + 1,     // insertion
+                    matrix[i - 1][j] + 1      // deletion
+                );
+            }
+        }
+    }
+    
+    return matrix[str2.length][str1.length];
 }
 
 /**

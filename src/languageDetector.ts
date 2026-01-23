@@ -241,6 +241,17 @@ export async function detectExistingFramework(
             } catch {
                 // File doesn't exist
             }
+        } else if (language === 'java') {
+            // Check pom.xml for JUnit/TestNG
+            const pomUri = vscode.Uri.joinPath(workspaceUri, 'pom.xml');
+            try {
+                const content = await vscode.workspace.fs.readFile(pomUri);
+                const text = content.toString();
+                if (text.includes('junit-jupiter')) return 'junit';
+                if (text.includes('testng')) return 'testng';
+            } catch {
+                // File doesn't exist
+            }
         }
     } catch (error) {
         console.error('Error detecting framework:', error);

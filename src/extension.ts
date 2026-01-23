@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { getConfig, getApiKey, promptForApiKey, storeApiKey } from './config';
 import { getLanguageFromDocument, showLanguageSelector, validateCode } from './languageDetector';
 import { generateTests } from './testCaseGenerator';
-import { createTestCasePanel } from './webviewProvider';
+import { createTestCasePanel, cleanupTempFiles } from './webviewProvider';
 import { registerSidebarView } from './sidebarProvider';
 import type { SupportedLanguage } from './types';
 
@@ -135,7 +135,7 @@ async function handleGenerateTests(context: vscode.ExtensionContext) {
                     progress.report({ increment: 60, message: 'Processing results...' });
 
                     // 8. Show results in WebView panel
-                    createTestCasePanel(context, tests);
+                    createTestCasePanel(context, tests, code, config);
 
                     progress.report({ increment: 100, message: 'Done!' });
 
@@ -219,7 +219,7 @@ async function handleGenerateFromSelection(context: vscode.ExtensionContext) {
                 progress.report({ increment: 30 });
                 const tests = await generateTests(code, language as SupportedLanguage, config);
                 progress.report({ increment: 60 });
-                createTestCasePanel(context, tests);
+                createTestCasePanel(context, tests, code, config);
                 progress.report({ increment: 100 });
                 vscode.window.showInformationMessage(`✅ Generated ${tests.testCases.length} test cases!`);
             }
@@ -318,5 +318,12 @@ function showWelcomeMessage(context: vscode.ExtensionContext) {
  * Extension deactivation
  */
 export function deactivate() {
-    console.log('AI Test Case Generator extension is now deactivated');
+    console.log('AI Test Case Generator extension is now deactivating');
+    
+    // Cleanup any remaining temp test files
+    cleanupTempFiles().then(() => {
+        console.log('Temp file cleanup complete');
+    }).catch((error) => {
+        console.error('Error during temp file cleanup:', error);
+    });
 }

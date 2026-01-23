@@ -53,17 +53,28 @@ In the Extension Development Host window:
 Once tests are generated, you can:
 - **Copy All** - Click "📋 Copy All Tests" button
 - **Copy Individual** - Click "Copy" on any specific test
+- **Generate More** - Click "➕ Generate More (12 Tests)" to add 12 unique tests
 - **Save to File** - Click "💾 Save to File" and choose location
-- **Run Tests** - Click "▶️ Run Tests" (if npm test is configured)
+- **Run Tests** - Click "▶️ Run Tests" to execute tests
+
+### 6. Generating Additional Tests
+
+Need more test coverage?
+1. Click the **"➕ Generate More (12 Tests)"** button
+2. Extension generates 12 new tests and replaces the display
+3. Panel always shows the latest 12 tests (keeps interface clean)
+4. System tracks all historical tests in background for deduplication
+5. Each generation delivers unique, diverse test patterns
 
 ## 📝 Testing with Example File
 
 1. The project includes `example.js` with sample functions
 2. Open it and run the extension
-3. You should see tests generated for:
-   - ✅ Normal cases (basic functionality)
-   - ⚠️ Edge cases (empty arrays, null values)
-   - ❌ Error cases (division by zero, invalid inputs)
+3. You should see **exactly 12 tests** generated for:
+   - ✅ Normal cases (~5 tests): basic functionality
+   - ⚠️ Edge cases (~5 tests): empty arrays, null values, boundaries
+   - ❌ Error cases (~2 tests): division by zero, invalid inputs
+4. Click "Generate More" to replace with 12 new unique tests
 
 ## 🔧 Configuration Settings
 
@@ -122,14 +133,26 @@ describe('Math Functions', () => {
 
 ## 🎯 Test Coverage
 
-The AI generates:
-- ✅ **Normal Tests**: Basic functionality
-- ⚠️ **Edge Cases**: Boundaries, empty inputs, null values
-- ❌ **Error Tests**: Exceptions, invalid inputs
+The AI generates **exactly 12 tests per batch**:
+- ✅ **Normal Tests** (~5): Basic functionality with typical inputs
+- ⚠️ **Edge Cases** (~5): Boundaries, empty inputs, null values, large numbers
+- ❌ **Error Tests** (~2): Exceptions, invalid inputs, error handling
 
-## 🔄 Regenerating Tests
+### Smart Generation System
+- 🎯 **Context-Aware**: AI analyzes existing tests to generate diverse patterns
+- 🧹 **Quality Assured**: Intelligent retry logic ensures optimal results
+- 📊 **Consistent Output**: Always delivers exactly 12 tests per batch
+- 🎲 **Systematic Coverage**: Predictable growth (12→24→36→48) for comprehensive testing
 
-If you're not satisfied with the results:
+## 🔄 Expanding Test Coverage
+
+**Option 1: Generate More Tests**
+1. Click "➕ Generate More (12 Tests)" button
+2. Display replaces with 12 new unique tests
+3. All previous tests tracked for deduplication
+4. Keeps interface clean while maintaining quality
+
+**Option 2: Regenerate from Scratch**
 1. Run the command again (each generation is unique)
 2. Adjust the temperature setting (higher = more creative)
 3. Try selecting specific code sections

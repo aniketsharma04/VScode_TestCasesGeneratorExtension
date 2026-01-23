@@ -34,6 +34,16 @@ export interface GeneratedTests {
     fullCode: string;
     /** When generated (timestamp) */
     timestamp: number;
+    /** Metadata about test generation */
+    metadata?: {
+        duplicatesRemoved: number;
+        totalGenerated: number;
+        uniqueTests: number;
+        aiGenerated?: number;
+        variationsGenerated?: number;
+        attempts?: number;
+        round?: number;
+    };
 }
 
 /**

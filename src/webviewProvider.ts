@@ -5,17 +5,33 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import type { GeneratedTests } from './types';
+import type { GeneratedTests, TestCase } from './types';
+import { generateTests } from './testCaseGenerator';
 
 const execAsync = promisify(exec);
 let outputChannel: vscode.OutputChannel | null = null;
+
+// Track temp files for cleanup on extension deactivate
+const tempFilesToCleanup: vscode.Uri[] = [];
+
+// Store current context for "Generate More" functionality
+interface PanelContext {
+    code: string;
+    language: string;
+    config: any;
+    allHistoricalTests: TestCase[];  // Track all tests ever generated for deduplication
+    generationRound: number;  // Track which generation round we're on
+}
+const panelContexts = new Map<string, PanelContext>();
 
 /**
  * Create and show WebView panel
  */
 export function createTestCasePanel(
     context: vscode.ExtensionContext,
-    tests: GeneratedTests
+    tests: GeneratedTests,
+    code?: string,
+    config?: any
 ): vscode.WebviewPanel {
     // Create panel
     const panel = vscode.window.createWebviewPanel(
@@ -30,6 +46,22 @@ export function createTestCasePanel(
             ]
         }
     );
+    
+    // Store panel context if provided
+    if (code && config) {
+        panelContexts.set(panel.title, {
+            code,
+            language: tests.language,
+            config,
+            allHistoricalTests: [...tests.testCases],  // Initialize with first batch
+            generationRound: 1  // First generation
+        });
+    }
+    
+    // Clean up context when panel is disposed
+    panel.onDidDispose(() => {
+        panelContexts.delete(panel.title);
+    });
 
     // Set HTML content
     panel.webview.html = getWebviewContent(panel.webview, tests, context);
@@ -81,7 +113,7 @@ function getWebviewContent(
             <div class="header-info">
                 <span class="badge badge-language">${escapeHtml(tests.language)}</span>
                 <span class="badge badge-framework">${escapeHtml(tests.framework)}</span>
-                <span class="badge">Total: ${tests.testCases.length} tests</span>
+                <span class="badge">Current Batch: ${tests.testCases.length} tests</span>
             </div>
         </header>
 
@@ -106,6 +138,9 @@ function getWebviewContent(
             <button id="copyAll" class="btn btn-primary">
                 <span class="icon">📋</span> Copy All Tests
             </button>
+            <button id="generateMore" class="btn btn-accent">
+                <span class="icon">➕</span> Generate More (12 Tests)
+            </button>
             <button id="saveFile" class="btn btn-secondary">
                 <span class="icon">💾</span> Save to File
             </button>
@@ -118,9 +153,18 @@ function getWebviewContent(
         <div class="test-cases">
             ${tests.testCases.length > 0 ? `
             <div class="section">
-                <h2>Generated Test Cases</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                    <h2 style="margin: 0;">Generated Test Cases</h2>
+                    <select id="testTypeFilter" style="padding: 0.5rem 1rem; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; cursor: pointer; font-size: 14px;">
+                        <option value="all">All</option>
+                        <option value="normal">Normal Cases</option>
+                        <option value="edge">Edge Cases</option>
+                        <option value="error">Error Cases</option>
+                    </select>
+                </div>
+                <div id="typeDefinition" style="padding: 0.75rem 1rem; margin-bottom: 1.5rem; border-left: 3px solid var(--vscode-textBlockQuote-border); background: var(--vscode-textBlockQuote-background); color: var(--vscode-textBlockQuote-foreground); font-size: 13px; display: none;"></div>
                 ${tests.testCases.map((test, index) => `
-                    <div class="test-case test-${test.type}">
+                    <div class="test-case test-${test.type}" data-test-type="${test.type}">
                         <div class="test-header">
                             <span class="test-number">#${index + 1}</span>
                             <span class="test-name">${escapeHtml(test.name)}</span>
@@ -179,10 +223,124 @@ async function handleWebviewMessage(
                 message.framework
             );
             break;
+        
+        case 'generateMore':
+            await handleGenerateMore(message, panel, tests, context);
+            break;
 
         case 'error':
             vscode.window.showErrorMessage(message.text);
             break;
+    }
+}
+
+/**
+ * Handle "Generate More" tests request
+ */
+async function handleGenerateMore(
+    message: any,
+    panel: vscode.WebviewPanel,
+    currentTests: GeneratedTests,
+    context: vscode.ExtensionContext
+): Promise<void> {
+    try {
+        // Get stored context
+        const panelContext = panelContexts.get(panel.title);
+        if (!panelContext) {
+            vscode.window.showErrorMessage('Cannot generate more tests: context not found. Please regenerate tests from source code.');
+            return;
+        }
+        
+        // Show progress
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'Generating 12 more test cases...',
+                cancellable: false
+            },
+            async (progress) => {
+                progress.report({ increment: 0, message: 'Analyzing existing tests...' });
+                
+                // Use ALL historical tests for deduplication (not just visible ones)
+                const allHistoricalTests = panelContext.allHistoricalTests;
+                const currentRound = panelContext.generationRound + 1;
+                
+                progress.report({ increment: 30, message: 'Calling AI...' });
+                
+                const newTests = await generateTests(
+                    panelContext.code,
+                    panelContext.language as any,
+                    panelContext.config,
+                    currentTests.framework,
+                    allHistoricalTests  // Pass all historical tests
+                );
+                
+                progress.report({ increment: 70, message: 'Preparing new tests...' });
+                
+                // Replace with new tests (don't merge, only show latest 12)
+                const replacedTests: GeneratedTests = {
+                    ...currentTests,
+                    testCases: newTests.testCases,  // REPLACE: Only show new 12 tests
+                    fullCode: newTests.fullCode,
+                    timestamp: Date.now(),
+                    metadata: {
+                        duplicatesRemoved: newTests.metadata?.duplicatesRemoved || 0,
+                        totalGenerated: newTests.metadata?.totalGenerated || 12,
+                        uniqueTests: newTests.metadata?.uniqueTests || 12,
+                        aiGenerated: newTests.metadata?.aiGenerated,
+                        variationsGenerated: newTests.metadata?.variationsGenerated,
+                        attempts: newTests.metadata?.attempts,
+                        round: currentRound
+                    }
+                };
+                
+                // Update historical tests in context (add new tests to history)
+                panelContext.allHistoricalTests = [...allHistoricalTests, ...newTests.testCases];
+                panelContext.generationRound = currentRound;
+                panelContexts.set(panel.title, panelContext);
+                
+                // Update the panel with only new tests
+                panel.webview.html = getWebviewContent(panel.webview, replacedTests, context);
+                
+                progress.report({ increment: 100, message: 'Done!' });
+                
+                // Build intelligent success message
+                const totalHistorical = panelContext.allHistoricalTests.length;
+                const metadata = newTests.metadata;
+                
+                let message = '✅ Generated 12 new tests';
+                
+                // Add context info if interesting
+                const details: string[] = [];
+                if (metadata?.duplicatesRemoved && metadata.duplicatesRemoved > 0) {
+                    details.push(`${metadata.duplicatesRemoved} duplicates avoided`);
+                }
+                if (metadata?.variationsGenerated && metadata.variationsGenerated > 0) {
+                    details.push(`${metadata.variationsGenerated} variations`);
+                }
+                if (totalHistorical > 12) {
+                    details.push(`${totalHistorical} total in history`);
+                }
+                
+                if (details.length > 0) {
+                    message += ` • ${details.join(', ')}`;
+                }
+                
+                // Log detailed stats to console for developers
+                console.log(`[Generate More] Round ${currentRound} Stats:`, {
+                    displayed: 12,
+                    historical: totalHistorical,
+                    duplicatesRemoved: metadata?.duplicatesRemoved || 0,
+                    aiGenerated: metadata?.aiGenerated || 0,
+                    variations: metadata?.variationsGenerated || 0,
+                    attempts: metadata?.attempts || 0
+                });
+                
+                vscode.window.showInformationMessage(message);
+            }
+        );
+    } catch (error: any) {
+        vscode.window.showErrorMessage(`Failed to generate more tests: ${error.message}`);
     }
 }
 
@@ -241,17 +399,20 @@ async function runTestsInTerminal(
 
         // Create temporary test file
         const tempFileName = getTempTestFileName(language, framework);
-        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
         
         // FIX MODULE PATHS BEFORE WRITING FILE
         const fixedCode = await fixModulePaths(testCode, language);
         
+        // Determine best location for temp file (handles Java package paths)
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        
         // Write test code to file with fixed paths
         const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+        await vscode.workspace.fs.writeFile(tempFileUri, encoder.encode(fixedCode));
         
         // Get test command based on language and framework
-        const testCommand = getTestCommand(language, framework, tempFileName);
+        const javaTestSelector = language === 'java' ? getJavaTestSelector(fixedCode, tempFileName) : null;
+        const testCommand = getTestCommand(language, framework, tempFileName, javaTestSelector);
         
         if (!testCommand) {
             vscode.window.showErrorMessage(`Unable to determine test command for ${language} with ${framework}`);
@@ -273,24 +434,23 @@ async function runTestsInTerminal(
         const commandBlock = `cd "${workspaceFolder.uri.fsPath}"; Write-Host "Working Directory: $(Get-Location)" -ForegroundColor Green; ${testCommand}`;
         terminal.sendText(commandBlock);
         
-        // Optional: Clean up after a delay
+        // Track temp file for cleanup on extension close (backup cleanup)
+        tempFilesToCleanup.push(tempFileUri);
+        
+        // Auto-delete temp file after tests complete (with delay to allow terminal to read it)
         setTimeout(async () => {
-            const shouldDelete = await vscode.window.showQuickPick(
-                ['Yes', 'No'],
-                { 
-                    placeHolder: `Delete temporary test file (${tempFileName})?` 
+            try {
+                await vscode.workspace.fs.delete(tempFileUri);
+                // Remove from cleanup list since we deleted it
+                const index = tempFilesToCleanup.indexOf(tempFileUri);
+                if (index > -1) {
+                    tempFilesToCleanup.splice(index, 1);
                 }
-            );
-            
-            if (shouldDelete === 'Yes') {
-                try {
-                    await vscode.workspace.fs.delete(tempFilePath);
-                    vscode.window.showInformationMessage('Temporary test file deleted.');
-                } catch (error) {
-                    console.error('Failed to delete temp file:', error);
-                }
+                console.log(`Auto-deleted temporary test file: ${tempFileName}`);
+            } catch (error) {
+                console.error('Failed to auto-delete temp file:', error);
             }
-        }, 5000); // Wait 5 seconds before asking
+        }, 30000); // 30 seconds delay to ensure tests finish reading the file
         
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to run tests: ${error.message}`);
@@ -302,51 +462,68 @@ async function runTestsInTerminal(
  * Fix module paths in generated test code
  */
 async function fixModulePaths(testCode: string, language: string): Promise<string> {
-    if (language !== 'javascript' && language !== 'typescript') {
-        return testCode;
-    }
-    
     const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        return testCode;
-    }
-    
-    // Get the current file name without extension
-    const uri = editor.document.uri;
-    const fileName = uri.path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'module';
-    const fullFileName = uri.path.split('/').pop() || 'module';
-    
-    // Language-specific fixes
+
+    // Fallback to original code if we cannot infer context
+    const uri = editor?.document.uri;
+    const sourceFileName = uri?.path.split('/').pop() || 'module';
+    const baseName = sourceFileName.replace(/\.[^.]+$/, '') || 'module';
+
     let fixed = testCode;
-    
-    // JavaScript/TypeScript - require() and import
-    fixed = fixed
-        .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${fileName}')`)
-        .replace(/require\(['"]\.\/module['"]\)/g, `require('./${fileName}')`)
-        .replace(/require\(['"]\.\/yourFile['"]\)/g, `require('./${fileName}')`)
-        .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${fileName}'`)
-        .replace(/from\s+['"]\.\/module['"]/g, `from './${fileName}'`)
-        .replace(/from\s+['"]\.\/yourFile['"]/g, `from './${fileName}'`);
-    
-    // Python - from X import Y
-    fixed = fixed
-        .replace(/from\s+your_module_name\s+import/g, `from ${fileName} import`)
-        .replace(/from\s+module\s+import/g, `from ${fileName} import`)
-        .replace(/from\s+yourFile\s+import/g, `from ${fileName} import`)
-        .replace(/import\s+your_module_name/g, `import ${fileName}`)
-        .replace(/import\s+module(?!\s*\.)/g, `import ${fileName}`)
-        .replace(/import\s+yourFile/g, `import ${fileName}`);
-    
-    // Java - import statements
-    const className = fileName.charAt(0).toUpperCase() + fileName.slice(1);
-    fixed = fixed
-        .replace(/import\s+YourClass;/g, `import ${className};`)
-        .replace(/import\s+Module;/g, `import ${className};`)
-        .replace(/new\s+YourClass\(/g, `new ${className}(`)
-        .replace(/new\s+Module\(/g, `new ${className}(`)
-        .replace(/YourClass\./g, `${className}.`)
-        .replace(/Module\./g, `${className}.`);
-    
+
+    // JavaScript/TypeScript - normalize module paths
+    if (language === 'javascript' || language === 'typescript') {
+        fixed = fixed
+            .replace(/require\(['"]\.\/your_module_name['"]\)/g, `require('./${baseName}')`)
+            .replace(/require\(['"]\.\/module['"]\)/g, `require('./${baseName}')`)
+            .replace(/require\(['"]\.\/yourFile['"]\)/g, `require('./${baseName}')`)
+            .replace(/from\s+['"]\.\/your_module_name['"]/g, `from './${baseName}'`)
+            .replace(/from\s+['"]\.\/module['"]/g, `from './${baseName}'`)
+            .replace(/from\s+['"]\.\/yourFile['"]/g, `from './${baseName}'`);
+        return fixed;
+    }
+
+    // Python - normalize imports
+    if (language === 'python') {
+        fixed = fixed
+            .replace(/from\s+your_module_name\s+import/g, `from ${baseName} import`)
+            .replace(/from\s+module\s+import/g, `from ${baseName} import`)
+            .replace(/from\s+yourFile\s+import/g, `from ${baseName} import`)
+            .replace(/import\s+your_module_name/g, `import ${baseName}`)
+            .replace(/import\s+module(?!\s*\.)/g, `import ${baseName}`)
+            .replace(/import\s+yourFile/g, `import ${baseName}`);
+        return fixed;
+    }
+
+    // Java - normalize imports, class names, and add package if inferable
+    if (language === 'java') {
+        const className = baseName.charAt(0).toUpperCase() + baseName.slice(1);
+        fixed = fixed
+            .replace(/import\s+YourClass;/g, `import ${className};`)
+            .replace(/import\s+Module;/g, `import ${className};`)
+            .replace(/new\s+YourClass\(/g, `new ${className}(`)
+            .replace(/new\s+Module\(/g, `new ${className}(`)
+            .replace(/YourClass\./g, `${className}.`)
+            .replace(/Module\./g, `${className}.`);
+
+        // Attempt to infer package from source path and inject if missing
+        if (uri) {
+            const segments = uri.path.split('/');
+            const javaIndex = segments.lastIndexOf('java');
+            if (javaIndex !== -1 && javaIndex + 1 < segments.length) {
+                const pkgSegments = segments.slice(javaIndex + 1, segments.length - 1); // exclude file
+                if (pkgSegments.length > 0) {
+                    const packageName = pkgSegments.join('.');
+                    const hasPackage = /package\s+[\w\.]+\s*;/.test(fixed);
+                    if (!hasPackage) {
+                        fixed = `package ${packageName};\n\n${fixed}`;
+                    }
+                }
+            }
+        }
+        return fixed;
+    }
+
     return fixed;
 }
 
@@ -372,7 +549,7 @@ async function runTestsWithOutput(
         }
         
         outputChannel.clear();
-        outputChannel.show();
+        // Do not show output panel - Terminal is the primary interface
         outputChannel.appendLine('='.repeat(80));
         outputChannel.appendLine(`Running ${framework} tests...`);
         outputChannel.appendLine('='.repeat(80));
@@ -380,17 +557,20 @@ async function runTestsWithOutput(
 
         // Create temp file
         const tempFileName = getTempTestFileName(language, framework);
-        const tempFilePath = vscode.Uri.joinPath(workspaceFolder.uri, tempFileName);
         
         // FIX MODULE PATHS BEFORE WRITING FILE
         const fixedCode = await fixModulePaths(testCode, language);
         
+        // Determine best location for temp file (handles Java package paths)
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        
         // Write fixed code to temp file
         const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(tempFilePath, encoder.encode(fixedCode));
+        await vscode.workspace.fs.writeFile(tempFileUri, encoder.encode(fixedCode));
 
         // Get test command
-        const testCommand = getTestCommand(language, framework, tempFileName);
+        const javaTestSelector = language === 'java' ? getJavaTestSelector(fixedCode, tempFileName) : null;
+        const testCommand = getTestCommand(language, framework, tempFileName, javaTestSelector);
         
         if (!testCommand) {
             outputChannel.appendLine(`❌ Error: No test command found for ${language} with ${framework}`);
@@ -421,7 +601,7 @@ async function runTestsWithOutput(
             outputChannel.appendLine('='.repeat(80));
             outputChannel.appendLine('✅ Tests completed successfully!');
             
-            vscode.window.showInformationMessage('✅ Tests completed! Check Output panel for results.');
+            vscode.window.showInformationMessage('✅ Tests completed! See Terminal for results.');
 
         } catch (execError: any) {
             outputChannel.appendLine('ERROR:');
@@ -431,12 +611,12 @@ async function runTestsWithOutput(
             outputChannel.appendLine('='.repeat(80));
             outputChannel.appendLine('❌ Tests failed or encountered errors.');
             
-            vscode.window.showErrorMessage('❌ Tests failed. Check Output panel for details.');
+            vscode.window.showErrorMessage('❌ Tests failed. See Terminal for details.');
         }
 
         // Clean up temp file
         try {
-            await vscode.workspace.fs.delete(tempFilePath);
+            await vscode.workspace.fs.delete(tempFileUri);
             outputChannel.appendLine(`Cleaned up temporary file: ${tempFileName}`);
         } catch {
             outputChannel.appendLine(`Note: Temporary file ${tempFileName} may still exist.`);
@@ -480,9 +660,56 @@ function getTempTestFileName(language: string, framework: string): string {
 }
 
 /**
+ * Determine the best temp file location based on language (handles Java package paths)
+ */
+async function getTempFileUri(
+    language: string,
+    tempFileName: string,
+    testCode: string,
+    workspaceFolder: vscode.WorkspaceFolder
+): Promise<vscode.Uri> {
+    // Default: workspace root
+    let baseDir = workspaceFolder.uri;
+
+    if (language === 'java') {
+        // Place temp tests under src/test/java respecting package path when present
+        const javaTestRoot = vscode.Uri.joinPath(workspaceFolder.uri, 'src', 'test', 'java');
+        let targetDir = javaTestRoot;
+
+        const packageMatch = testCode.match(/package\s+([a-zA-Z0-9_.]+)\s*;/);
+        if (packageMatch && packageMatch[1]) {
+            const packagePath = packageMatch[1].split('.').join('/');
+            targetDir = vscode.Uri.joinPath(javaTestRoot, packagePath);
+        }
+
+        await vscode.workspace.fs.createDirectory(targetDir);
+        return vscode.Uri.joinPath(targetDir, tempFileName);
+    }
+
+    return vscode.Uri.joinPath(baseDir, tempFileName);
+}
+
+/**
+ * Build a Maven test selector (fully qualified) from Java code/package
+ */
+function getJavaTestSelector(testCode: string, tempFileName: string): string {
+    const className = tempFileName.replace('.java', '');
+    const packageMatch = testCode.match(/package\s+([a-zA-Z0-9_.]+)\s*;/);
+    if (packageMatch && packageMatch[1]) {
+        return `${packageMatch[1]}.${className}`;
+    }
+    return className;
+}
+
+/**
  * Get the appropriate test command based on language and framework
  */
-function getTestCommand(language: string, framework: string, fileName: string): string | null {
+function getTestCommand(
+    language: string,
+    framework: string,
+    fileName: string,
+    javaTestSelector?: string | null
+): string | null {
     const commands: { [key: string]: string } = {
         // JavaScript/TypeScript - Use Jest with explicit config and rootDir
         'javascript-jest': `npx jest --config=jest.config.js --rootDir=. ${fileName}`,
@@ -497,8 +724,8 @@ function getTestCommand(language: string, framework: string, fileName: string): 
         'python-unittest': `python -m unittest ${fileName}`,
         
         // Java - Using Maven
-        'java-junit': `mvn test -Dtest=${fileName.replace('.java', '')}`,
-        'java-testng': `mvn test -Dtest=${fileName.replace('.java', '')}`,
+        'java-junit': `mvn test -Dtest=${javaTestSelector || fileName.replace('.java', '')}`,
+        'java-testng': `mvn test -Dtest=${javaTestSelector || fileName.replace('.java', '')}`,
         
         // Go
         'go-testing': `go test ./${fileName} -v`,
@@ -590,11 +817,31 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
         
         // Check pom.xml for Java/Maven
         if (framework === 'junit') {
-            const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
+            console.log('[Framework Check] Checking JUnit/Maven installation...');
+            
+            // First check if Maven is installed
             try {
-                const pomContent = await vscode.workspace.fs.readFile(pomPath);
-                return pomContent.toString().includes('junit');
-            } catch {
+                const { exec } = require('child_process');
+                const { promisify } = require('util');
+                const execAsync = promisify(exec);
+                
+                await execAsync('mvn -version');
+                console.log('[Framework Check] Maven is installed ✓');
+                
+                // Now check if pom.xml exists with JUnit
+                const pomPath = vscode.Uri.joinPath(workspaceFolder.uri, 'pom.xml');
+                try {
+                    const pomContent = await vscode.workspace.fs.readFile(pomPath);
+                    const pomText = pomContent.toString();
+                    const hasJunit = pomText.includes('junit-jupiter');
+                    console.log('[Framework Check] JUnit in pom.xml:', hasJunit);
+                    return hasJunit;
+                } catch {
+                    console.log('[Framework Check] No pom.xml found');
+                    return false;
+                }
+            } catch (error: any) {
+                console.log('[Framework Check] Maven not installed:', error.message);
                 return false;
             }
         }
@@ -611,6 +858,41 @@ async function checkFrameworkInstalled(framework: string): Promise<boolean> {
  * Install testing framework
  */
 async function installFramework(framework: string): Promise<void> {
+    // Special handling for JUnit - check Maven first
+    if (framework === 'junit') {
+        try {
+            const { exec } = require('child_process');
+            const { promisify } = require('util');
+            const execAsync = promisify(exec);
+            
+            await execAsync('mvn -version');
+            // Maven is installed, proceed with installation
+            const terminal = vscode.window.createTerminal('Install JUnit');
+            terminal.show();
+            terminal.sendText('mvn clean install');
+            vscode.window.showInformationMessage('Installing JUnit dependencies...');
+        } catch {
+            // Maven not installed
+            const action = await vscode.window.showErrorMessage(
+                'Maven is not installed. Java testing requires JDK 11+ and Maven.',
+                'View Setup Guide',
+                'Cancel'
+            );
+            
+            if (action === 'View Setup Guide') {
+                const setupDoc = vscode.Uri.file(vscode.workspace.workspaceFolders?.[0].uri.fsPath + '/javasetup.md');
+                try {
+                    const doc = await vscode.workspace.openTextDocument(setupDoc);
+                    await vscode.window.showTextDocument(doc);
+                } catch {
+                    vscode.window.showWarningMessage('Setup guide not found. Please install JDK 11+ and Maven manually.');
+                }
+            }
+        }
+        return;
+    }
+    
+    // For other frameworks
     const terminal = vscode.window.createTerminal('Install Test Framework');
     terminal.show();
     
@@ -619,8 +901,7 @@ async function installFramework(framework: string): Promise<void> {
         'mocha': 'npm install --save-dev mocha',
         'jasmine': 'npm install --save-dev jasmine',
         'vitest': 'npm install --save-dev vitest',
-        'pytest': 'pip install pytest',
-        'junit': 'mvn install'
+        'pytest': 'pip install pytest'
     };
     
     const command = installCommands[framework];
@@ -659,27 +940,12 @@ async function runTestsWithFrameworkCheck(
         // If 'Run Anyway', proceed below
     }
     
-    // Ask user which method to use
-    const method = await vscode.window.showQuickPick(
-        [
-            { label: 'Terminal', description: 'Run tests in integrated terminal (real-time output)' },
-            { label: 'Output Panel', description: 'Run tests and show results in output panel' }
-        ],
-        {
-            placeHolder: 'Choose how to run tests'
-        }
-    );
-    
-    if (!method) {
-        return;
-    }
-    
-    // Proceed with running tests
-    if (method.label === 'Terminal') {
-        await runTestsInTerminal(testCode, language, framework);
-    } else {
-        await runTestsWithOutput(testCode, language, framework);
-    }
+    // Run in both terminal and output panel for better UX
+    vscode.window.showInformationMessage('Running tests in Terminal and Output panel...');
+
+    // Run terminal first (streams live), then output channel (captured results)
+    await runTestsInTerminal(testCode, language, framework);
+    await runTestsWithOutput(testCode, language, framework);
 }
 
 /**
@@ -771,4 +1037,23 @@ function getNonce(): string {
  */
 function getUri(webview: vscode.Webview, context: vscode.ExtensionContext, pathSegments: string[]): vscode.Uri {
     return webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, ...pathSegments));
+}
+
+/**
+ * Cleanup all temp files (called on extension deactivate)
+ */
+export async function cleanupTempFiles(): Promise<void> {
+    console.log(`Cleaning up ${tempFilesToCleanup.length} temporary test files...`);
+    
+    for (const fileUri of tempFilesToCleanup) {
+        try {
+            await vscode.workspace.fs.delete(fileUri);
+            console.log(`Deleted temp file: ${fileUri.fsPath}`);
+        } catch (error) {
+            console.error(`Failed to delete temp file ${fileUri.fsPath}:`, error);
+        }
+    }
+    
+    // Clear the array
+    tempFilesToCleanup.length = 0;
 }
