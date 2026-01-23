@@ -9,7 +9,6 @@ import type { ExtensionConfig, GeneratedTests, SupportedLanguage, TestCase } fro
 // Configuration constants
 const TESTS_PER_GENERATION = 12; // Number of tests to generate per request
 const MAX_RETRIES = 2; // Maximum API retry attempts
-const YIELD_THRESHOLD = 0.5; // If yield < 50%, use variations
 
 /**
  * Main function to generate tests using configured AI provider with retry and variation logic
@@ -75,17 +74,12 @@ export async function generateTests(
             // Do not stop early; complete both attempts to compute yield
         }
         
-        // PHASE 2: Check yield threshold AFTER both API attempts
+        // PHASE 2: Calculate yield for diagnostics
         const averageYield = apiResults.reduce((sum, r) => sum + r.yieldPercent, 0) / apiResults.length;
-        console.log(`\n[Yield Analysis] Average yield: ${Math.round(averageYield)}%`);
+        console.log(`\n[Yield Analysis] Average yield: ${Math.round(averageYield)}% across ${totalApiCalls} API calls`);
         
-        if (averageYield < YIELD_THRESHOLD * 100) {
-            console.log(`[Yield Analysis] Below 50% threshold - will use variations to fill remaining tests`);
-        }
-        
-        // PHASE 3: Fill remaining tests with variations only when yield is low or still short
-        const shouldUseVariations = (averageYield < YIELD_THRESHOLD * 100) || (allUniqueTests.length < TESTS_PER_GENERATION);
-        if (shouldUseVariations && allUniqueTests.length < TESTS_PER_GENERATION) {
+        // PHASE 3: Fill remaining tests with variations if we're short of 12
+        if (allUniqueTests.length < TESTS_PER_GENERATION) {
             const needed = TESTS_PER_GENERATION - allUniqueTests.length;
             console.log(`\n[Variations] Need ${needed} more tests - generating rule-based variations...`);
             
