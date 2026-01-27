@@ -890,42 +890,111 @@ function parseTestCases(response: string, language: string, framework: string): 
 }
 
 /**
- * Extract individual Jest/Mocha test cases
+ * Extract individual Jest/Mocha test cases - FIXED VERSION
+ * Uses proper brace-matching that handles strings and comments
  */
 function extractJestTests(code: string, imports: string = ''): TestCase[] {
     const tests: TestCase[] = [];
     
-    // Match test() or it() blocks with better regex
-    const testRegex = /(?:test|it)\s*\(\s*['`"](.*?)['`"]\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{([\s\S]*?)\n\s*\}\s*\)/g;
-    const matches = [...code.matchAll(testRegex)];
+    // Match start of test() or it() - captures the test name
+    const testStartRegex = /(?:test|it)\s*\(\s*(['"`])((?:(?!\1).)*)\1\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{/g;
     
-    for (const match of matches) {
-        const testName = match[2];
-        const startIndex = match.index || 0;
+    let match;
+    while ((match = testStartRegex.exec(code)) !== null) {
+        const testName = match[2];  // Correctly get the test name from capture group 2
+        const startIndex = match.index;
+        const bodyStartIndex = match.index + match[0].length;
         
-        // Find matching closing brace
+        // Use brace-matching to find the end of the test body
+        // Account for strings and comments
         let braceCount = 1;
-        let endIndex = startIndex + match[0].length;
+        let endIndex = bodyStartIndex;
+        let inString: string | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
         
-        for (let i = endIndex; i < code.length && braceCount > 0; i++) {
-            if (code[i] === '{') braceCount++;
-            if (code[i] === '}') braceCount--;
-            if (braceCount === 0) {
-                endIndex = i + 1;
+        for (let i = bodyStartIndex; i < code.length && braceCount > 0; i++) {
+            const char = code[i];
+            const nextChar = i + 1 < code.length ? code[i + 1] : '';
+            
+            // Handle line comments
+            if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+            if (inLineComment && char === '\n') {
+                inLineComment = false;
+                continue;
+            }
+            
+            // Handle block comments
+            if (!inString && !inLineComment && char === '/' && nextChar === '*') {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+            if (inBlockComment && char === '*' && nextChar === '/') {
+                inBlockComment = false;
+                i++;
+                continue;
+            }
+            
+            // Skip if in comment
+            if (inLineComment || inBlockComment) {
+                continue;
+            }
+            
+            // Handle string literals
+            if (!inString && (char === '"' || char === "'" || char === '`')) {
+                inString = char;
+                continue;
+            }
+            if (inString && char === inString) {
+                // Check for escape
+                let escapeCount = 0;
+                let j = i - 1;
+                while (j >= 0 && code[j] === '\\') {
+                    escapeCount++;
+                    j--;
+                }
+                if (escapeCount % 2 === 0) {
+                    inString = null;
+                }
+                continue;
+            }
+            
+            // Skip if in string
+            if (inString) {
+                continue;
+            }
+            
+            // Count braces
+            if (char === '{') braceCount++;
+            if (char === '}') braceCount--;
+            endIndex = i;
+        }
+        
+        // Find the closing ); after the }
+        let fullEndIndex = endIndex + 1;
+        while (fullEndIndex < code.length) {
+            const char = code[fullEndIndex];
+            if (char === ')') {
+                fullEndIndex++;
+                // Check for optional semicolon after )
+                if (fullEndIndex < code.length && code[fullEndIndex] === ';') {
+                    fullEndIndex++;
+                }
+                break;
+            } else if (char === ' ' || char === '\n' || char === '\t') {
+                fullEndIndex++;
+            } else {
                 break;
             }
         }
         
-        // Handle the closing parenthesis and semicolon
-        while (endIndex < code.length && (code[endIndex] === ')' || code[endIndex] === ';' || code[endIndex] === ' ' || code[endIndex] === '\n')) {
-            if (code[endIndex] === ')' || code[endIndex] === ';') {
-                endIndex++;
-                break;
-            }
-            endIndex++;
-        }
-        
-        const testCode = code.substring(startIndex, endIndex).trim();
+        const testCode = code.substring(startIndex, fullEndIndex).trim();
+        console.log(`[extractJestTests] Extracted test "${testName}": ${testCode.substring(0, 100)}...`);
         
         // Combine imports with test code for standalone execution
         const fullTestCode = imports ? `${imports}\n\n${testCode}` : testCode;
@@ -939,6 +1008,7 @@ function extractJestTests(code: string, imports: string = ''): TestCase[] {
         });
     }
     
+    console.log(`[extractJestTests] Total extracted: ${tests.length} tests`);
     return tests;
 }
 
@@ -1210,22 +1280,28 @@ function createTestVariation(original: TestCase, language: string): TestCase {
  * Rebuild full test code from test cases
  */
 function rebuildFullCode(tests: TestCase[], language: string, framework: string): string {
+    console.log(`[rebuildFullCode] Called with ${tests.length} tests, language=${language}`);
+    
     if (tests.length === 0) {
         return '';
     }
     
     // Get imports from first test (they should all have same imports)
     const firstTest = tests[0];
+    console.log(`[rebuildFullCode] First test code (first 200 chars): ${firstTest.code.substring(0, 200)}`);
+    
     const importMatch = firstTest.code.match(/^(import .+?;|const .+? = require.+?;|from .+? import .+)/m);
     const imports = importMatch ? importMatch[0] : '';
+    console.log(`[rebuildFullCode] Extracted imports: ${imports}`);
     
     // Extract test bodies
-    const testBodies = tests.map(t => {
+    const testBodies = tests.map((t, idx) => {
         // Remove imports from individual tests
         let body = t.code;
         if (importMatch) {
             body = body.replace(importMatch[0], '').trim();
         }
+        console.log(`[rebuildFullCode] Test ${idx + 1} body (first 150 chars): ${body.substring(0, 150)}`);
         return body;
     });
     
@@ -1239,8 +1315,40 @@ function rebuildFullCode(tests: TestCase[], language: string, framework: string)
                 .replace(/^\s*(const\s+\{[^}]+\}\s*=\s*require\([^)]*\);?|import\s+[^;]+;?)\s*/m, '')
                 .trim();
         });
-        const indentedTests = cleanedBodies.map(tb => indentLines(tb, 2)).join('\n\n');
-        return `${importLine}\n\ndescribe('Generated Tests', () => {\n${indentedTests}\n});`;
+        
+        // Properly indent each test block
+        const indentedTests = cleanedBodies.map(tb => {
+            const lines = tb.split('\n');
+            return lines.map((line, idx) => {
+                const trimmed = line.trim();
+                if (trimmed.length === 0) return '';
+                
+                // First line (test declaration) gets 2 spaces
+                if (idx === 0) {
+                    return '  ' + trimmed;
+                }
+                // Closing }); gets 2 spaces
+                else if (trimmed === '});') {
+                    return '  ' + trimmed;
+                }
+                // Content inside test body gets 4 spaces
+                else {
+                    // Skip orphan }) that are not valid Jest closures
+                    if (trimmed === '})' || trimmed === ')') {
+                        console.log(`[rebuildFullCode] Skipping orphan brace: "${trimmed}"`);
+                        return '';
+                    }
+                    return '    ' + trimmed;
+                }
+            }).join('\n');
+        }).join('\n\n');
+        
+        // Final cleanup: remove any remaining orphan }) patterns
+        const cleanedIndentedTests = indentedTests
+            .replace(/^\s*\}\s*\)?\s*$/gm, '')  // Remove lines with just } or })
+            .replace(/\n{3,}/g, '\n\n');        // Collapse multiple blank lines
+        
+        return `${importLine}\n\ndescribe('Generated Tests', () => {\n${cleanedIndentedTests}\n});`;
     } else if (language === 'python') {
         // Rewrap all tests inside a single class to avoid indentation errors
         const moduleName = 'Generated';
@@ -1530,48 +1638,564 @@ public class ${capitalize(moduleName)}Test {
  */
 export function fixTestStructure(code: string, language: string, framework: string, moduleName: string = 'example'): string {
     console.log(`[Post-Processor] Fixing ${language} test structure...`);
+    console.log(`[Post-Processor] Input code length: ${code.length} chars`);
+    console.log(`[Post-Processor] First 200 chars: ${code.substring(0, 200)}`);
+    
+    let result: string;
     
     if (language === 'javascript' || language === 'typescript') {
-        return fixJavaScriptStructure(code, language, moduleName);
+        result = fixJavaScriptStructure(code, language, moduleName);
+    } else if (language === 'python') {
+        result = fixPythonStructure(code, moduleName);
+    } else if (language === 'java') {
+        result = fixJavaStructure(code, moduleName);
+    } else {
+        result = code;
     }
     
-    if (language === 'python') {
-        return fixPythonStructure(code, moduleName);
-    }
-    
-    if (language === 'java') {
-        return fixJavaStructure(code, moduleName);
-    }
-    
-    return code;
+    console.log(`[Post-Processor] Output code length: ${result.length} chars`);
+    console.log(`[Post-Processor] First 300 chars of output: ${result.substring(0, 300)}`);
+    return result;
 }
 
 /**
- * Fix JavaScript/TypeScript test structure
+ * ============================================================================
+ * ROBUST JAVASCRIPT/JEST VALIDATION & AUTO-FIX SYSTEM
+ * ============================================================================
+ * Pipeline: Generate → Auto-fix → Validate → Rebuild
  */
-function fixJavaScriptStructure(code: string, language: string, moduleName: string): string {
-    // Extract import/require statements (should be at top)
-    const importRegex = language === 'javascript'
-        ? /(?:const|let|var)\s+\{[^}]+\}\s*=\s*require\([^)]+\);?/g
-        : /import\s+\{[^}]+\}\s+from\s+['"][^'"]+['"];?/g;
+
+// ============================================================================
+// STEP 1: AUTO-FIX FUNCTIONS
+// ============================================================================
+
+/**
+ * Fix invalid function names - convert AI hallucinations to valid Jest functions
+ * e.g., check() → test(), example() → test(), spec() → test()
+ */
+function jestFixInvalidFunctions(code: string): string {
+    return code
+        .replace(/\bcheck\s*\(\s*(['"`])/g, 'test($1')
+        .replace(/\bexample\s*\(\s*(['"`])/g, 'test($1')
+        .replace(/\bspec\s*\(\s*(['"`])/g, 'test($1')
+        .replace(/\bcase\s*\(\s*(['"`])/g, 'test($1')
+        .replace(/\btestCase\s*\(\s*(['"`])/g, 'test($1');
+}
+
+/**
+ * Fix duplicate imports - keep only the FIRST require/import statement
+ */
+function jestFixDuplicateImports(code: string): string {
+    const lines = code.split('\n');
+    let importSeen = false;
     
-    const imports = code.match(importRegex) || [];
-    const uniqueImports = [...new Set(imports)]; // Remove duplicates
-    const importStatement = uniqueImports[0] || (language === 'javascript' 
-        ? `const { } = require('./${moduleName}');`
-        : `import { } from './${moduleName}';`);
+    return lines.filter(line => {
+        const trimmed = line.trim();
+        // Check for require() or import statements
+        if (trimmed.match(/^(?:const|let|var)\s+.*=\s*require\s*\(/) || 
+            trimmed.match(/^import\s+/)) {
+            if (importSeen) {
+                console.log('[AutoFix] Removing duplicate import:', trimmed.substring(0, 50));
+                return false;
+            }
+            importSeen = true;
+        }
+        return true;
+    }).join('\n');
+}
+
+/**
+ * Fix stray/orphan closing braces - remove } that close nothing
+ * Uses a stack-based approach to track balance
+ * HANDLES: String literals and comments (doesn't count braces inside them)
+ */
+function jestFixExtraBraces(code: string): string {
+    let balance = 0;
+    let result = '';
+    let i = 0;
+    let inString: string | null = null;  // Track if inside string (', ", `)
+    let inLineComment = false;
+    let inBlockComment = false;
     
-    // Extract test() or it() blocks
-    const testRegex = /(?:test|it)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{[\s\S]*?\n\s*\}\s*\);?/g;
-    const tests = code.match(testRegex) || [];
-    
-    if (tests.length === 0) {
-        console.warn('[Post-Processor] No test blocks found in JavaScript code');
-        return code; // Return original if no tests found
+    while (i < code.length) {
+        const char = code[i];
+        const nextChar = i + 1 < code.length ? code[i + 1] : '';
+        
+        // Handle line comments
+        if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
+            inLineComment = true;
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // End of line comment
+        if (inLineComment && char === '\n') {
+            inLineComment = false;
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // Handle block comments
+        if (!inString && !inLineComment && char === '/' && nextChar === '*') {
+            inBlockComment = true;
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // End of block comment
+        if (inBlockComment && char === '*' && nextChar === '/') {
+            inBlockComment = false;
+            result += char + nextChar;
+            i += 2;
+            continue;
+        }
+        
+        // Skip processing if in comment
+        if (inLineComment || inBlockComment) {
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // Handle string literals
+        if (!inString && (char === '"' || char === "'" || char === '`')) {
+            inString = char;
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // End of string (check for escape)
+        if (inString && char === inString) {
+            // Check if escaped
+            let escapeCount = 0;
+            let j = i - 1;
+            while (j >= 0 && code[j] === '\\') {
+                escapeCount++;
+                j--;
+            }
+            if (escapeCount % 2 === 0) {
+                // Not escaped, end of string
+                inString = null;
+            }
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // Skip processing if in string
+        if (inString) {
+            result += char;
+            i++;
+            continue;
+        }
+        
+        // NOW handle braces (we're not in string or comment)
+        if (char === '{') {
+            balance++;
+            result += char;
+        } else if (char === '}') {
+            if (balance > 0) {
+                balance--;
+                result += char;
+            } else {
+                // Skip this orphan brace
+                console.log('[AutoFix] Removing orphan closing brace at position', i);
+                // Also skip any trailing ) or ; or whitespace after the orphan brace
+                while (i + 1 < code.length) {
+                    const nextC = code[i + 1];
+                    if (nextC === ')' || nextC === ';') {
+                        i++;
+                    } else if (nextC === ' ' || nextC === '\t') {
+                        i++;
+                    } else if (nextC === '\n') {
+                        i++;
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result += char;
+        }
+        i++;
     }
     
-    // Rebuild with proper structure
-    const indentedTests = tests.map(test => '  ' + test.trim()).join('\n\n');
+    return result;
+}
+
+/**
+ * Extract valid test blocks using brace-matching (not regex)
+ * This correctly handles nested braces inside test bodies
+ * HANDLES: String literals and comments (doesn't count braces inside them)
+ */
+function jestExtractTestBlocks(code: string): { name: string; body: string; fullBlock: string }[] {
+    const tests: { name: string; body: string; fullBlock: string }[] = [];
+    
+    // Match start of test() or it() - captures the test name
+    const testStartRegex = /(?:test|it)\s*\(\s*(['"`])((?:(?!\1).)*)\1\s*,\s*(?:async\s+)?\(\s*\)\s*=>\s*\{/g;
+    
+    let match;
+    while ((match = testStartRegex.exec(code)) !== null) {
+        const testName = match[2];
+        const startIndex = match.index;
+        const bodyStartIndex = match.index + match[0].length;
+        
+        // Use brace-matching to find the end of the test body
+        // Account for strings and comments
+        let braceCount = 1;
+        let endIndex = bodyStartIndex;
+        let inString: string | null = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+        
+        for (let i = bodyStartIndex; i < code.length && braceCount > 0; i++) {
+            const char = code[i];
+            const nextChar = i + 1 < code.length ? code[i + 1] : '';
+            
+            // Handle line comments
+            if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
+                inLineComment = true;
+                i++;
+                continue;
+            }
+            if (inLineComment && char === '\n') {
+                inLineComment = false;
+                continue;
+            }
+            
+            // Handle block comments
+            if (!inString && !inLineComment && char === '/' && nextChar === '*') {
+                inBlockComment = true;
+                i++;
+                continue;
+            }
+            if (inBlockComment && char === '*' && nextChar === '/') {
+                inBlockComment = false;
+                i++;
+                continue;
+            }
+            
+            // Skip if in comment
+            if (inLineComment || inBlockComment) {
+                continue;
+            }
+            
+            // Handle string literals
+            if (!inString && (char === '"' || char === "'" || char === '`')) {
+                inString = char;
+                continue;
+            }
+            if (inString && char === inString) {
+                // Check for escape
+                let escapeCount = 0;
+                let j = i - 1;
+                while (j >= 0 && code[j] === '\\') {
+                    escapeCount++;
+                    j--;
+                }
+                if (escapeCount % 2 === 0) {
+                    inString = null;
+                }
+                continue;
+            }
+            
+            // Skip if in string
+            if (inString) {
+                continue;
+            }
+            
+            // Count braces
+            if (char === '{') braceCount++;
+            if (char === '}') braceCount--;
+            endIndex = i;
+        }
+        
+        // Find the closing ); after the }
+        let fullEndIndex = endIndex + 1;
+        while (fullEndIndex < code.length) {
+            const char = code[fullEndIndex];
+            if (char === ')' || char === ';') {
+                fullEndIndex++;
+                if (char === ')') {
+                    // Check for optional semicolon after )
+                    if (fullEndIndex < code.length && code[fullEndIndex] === ';') fullEndIndex++;
+                    break;
+                }
+            } else if (char === ' ' || char === '\n' || char === '\t') {
+                fullEndIndex++;
+            } else {
+                break;
+            }
+        }
+        
+        const body = code.substring(bodyStartIndex, endIndex).trim();
+        const fullBlock = code.substring(startIndex, fullEndIndex).trim();
+        
+        tests.push({ name: testName, body, fullBlock });
+    }
+    
+    return tests;
+}
+
+/**
+ * Fix duplicate tests - keep only first occurrence of each unique test
+ * Uses test name + normalized body as signature
+ */
+function jestFixDuplicateTests(testBlocks: { name: string; body: string; fullBlock: string }[]): { name: string; body: string; fullBlock: string }[] {
+    const seen = new Set<string>();
+    const uniqueTests: typeof testBlocks = [];
+    
+    for (const test of testBlocks) {
+        // Normalize: remove whitespace for comparison
+        const normalizedBody = test.body.replace(/\s+/g, '');
+        const signature = test.name + '|' + normalizedBody;
+        
+        if (seen.has(signature)) {
+            console.log('[AutoFix] Removing duplicate test:', test.name);
+            continue;
+        }
+        
+        // Also check for very similar names (case-insensitive, ignore minor differences)
+        const normalizedName = test.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        let isDuplicate = false;
+        for (const existing of uniqueTests) {
+            const existingNormalizedName = existing.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normalizedName === existingNormalizedName) {
+                console.log('[AutoFix] Removing test with duplicate name pattern:', test.name);
+                isDuplicate = true;
+                break;
+            }
+        }
+        
+        if (!isDuplicate) {
+            seen.add(signature);
+            uniqueTests.push(test);
+        }
+    }
+    
+    return uniqueTests;
+}
+
+/**
+ * Master auto-fix pipeline for JavaScript/Jest
+ */
+function jestAutoFix(code: string): { fixedCode: string; testBlocks: { name: string; body: string; fullBlock: string }[] } {
+    console.log('[Jest AutoFix] Starting auto-fix pipeline...');
+    
+    // Step 1: Fix invalid function names first
+    let fixed = jestFixInvalidFunctions(code);
+    console.log('[Jest AutoFix] Step 1: Fixed invalid function names');
+    
+    // Step 2: Fix duplicate imports
+    fixed = jestFixDuplicateImports(fixed);
+    console.log('[Jest AutoFix] Step 2: Fixed duplicate imports');
+    
+    // Step 3: Fix extra/orphan braces
+    fixed = jestFixExtraBraces(fixed);
+    console.log('[Jest AutoFix] Step 3: Fixed orphan braces');
+    
+    // Step 4: Extract valid test blocks
+    let testBlocks = jestExtractTestBlocks(fixed);
+    console.log(`[Jest AutoFix] Step 4: Extracted ${testBlocks.length} test blocks`);
+    
+    // Step 5: Remove duplicate tests
+    testBlocks = jestFixDuplicateTests(testBlocks);
+    console.log(`[Jest AutoFix] Step 5: ${testBlocks.length} unique tests after deduplication`);
+    
+    return { fixedCode: fixed, testBlocks };
+}
+
+// ============================================================================
+// STEP 2: TEXT-BASED VALIDATION (Fast checks)
+// ============================================================================
+
+interface JestValidationResult {
+    valid: boolean;
+    error?: string;
+    errors?: string[];
+}
+
+/**
+ * Validate single import rule
+ */
+function jestValidateSingleImport(code: string): JestValidationResult {
+    // Count require() statements
+    const requireMatches = code.match(/(?:const|let|var)\s+.*=\s*require\s*\(/g) || [];
+    // Count import statements
+    const importMatches = code.match(/^import\s+/gm) || [];
+    
+    const totalImports = requireMatches.length + importMatches.length;
+    
+    if (totalImports > 1) {
+        return {
+            valid: false,
+            error: `Multiple import/require statements found (${totalImports}). Should have exactly 1.`
+        };
+    }
+    
+    return { valid: true };
+}
+
+/**
+ * Validate balanced braces
+ */
+function jestValidateBalancedBraces(code: string): JestValidationResult {
+    let balance = 0;
+    let lineNumber = 1;
+    
+    for (let i = 0; i < code.length; i++) {
+        const char = code[i];
+        
+        if (char === '\n') lineNumber++;
+        if (char === '{') balance++;
+        if (char === '}') {
+            balance--;
+            if (balance < 0) {
+                return {
+                    valid: false,
+                    error: `Unmatched closing brace at line ${lineNumber}`
+                };
+            }
+        }
+    }
+    
+    if (balance !== 0) {
+        return {
+            valid: false,
+            error: `Unmatched braces: ${balance} opening brace(s) without closing`
+        };
+    }
+    
+    return { valid: true };
+}
+
+/**
+ * Validate no duplicate tests
+ */
+function jestValidateDuplicateTests(code: string): JestValidationResult {
+    const testRegex = /(?:test|it)\s*\(\s*(['"`])((?:(?!\1).)*)\1/g;
+    const seen = new Set<string>();
+    
+    let match;
+    while ((match = testRegex.exec(code)) !== null) {
+        const testName = match[2];
+        const normalizedName = testName.toLowerCase().trim();
+        
+        if (seen.has(normalizedName)) {
+            return {
+                valid: false,
+                error: `Duplicate test detected: "${testName}"`
+            };
+        }
+        seen.add(normalizedName);
+    }
+    
+    return { valid: true };
+}
+
+/**
+ * Validate only valid Jest functions are used
+ */
+function jestValidateTestFunctions(code: string): JestValidationResult {
+    // Look for invalid function calls that look like tests
+    const invalidPatterns = [
+        { pattern: /\bcheck\s*\(\s*['"`]/g, name: 'check()' },
+        { pattern: /\bexample\s*\(\s*['"`]/g, name: 'example()' },
+        { pattern: /\bspec\s*\(\s*['"`]/g, name: 'spec()' },
+        { pattern: /\bcase\s*\(\s*['"`]/g, name: 'case()' },
+    ];
+    
+    for (const { pattern, name } of invalidPatterns) {
+        if (pattern.test(code)) {
+            return {
+                valid: false,
+                error: `Invalid Jest function "${name}" found. Use test() or it() instead.`
+            };
+        }
+    }
+    
+    return { valid: true };
+}
+
+/**
+ * Master validation function - runs all validators
+ */
+function jestValidateTestFile(code: string): JestValidationResult {
+    const validators = [
+        { name: 'Single Import', fn: jestValidateSingleImport },
+        { name: 'Balanced Braces', fn: jestValidateBalancedBraces },
+        { name: 'No Duplicate Tests', fn: jestValidateDuplicateTests },
+        { name: 'Valid Test Functions', fn: jestValidateTestFunctions },
+    ];
+    
+    const errors: string[] = [];
+    
+    for (const { name, fn } of validators) {
+        const result = fn(code);
+        if (!result.valid && result.error) {
+            errors.push(`[${name}] ${result.error}`);
+        }
+    }
+    
+    if (errors.length > 0) {
+        return {
+            valid: false,
+            errors
+        };
+    }
+    
+    return { valid: true };
+}
+
+// ============================================================================
+// STEP 3: REBUILD CLEAN OUTPUT
+// ============================================================================
+
+/**
+ * Rebuild a clean, valid Jest test file from extracted test blocks
+ * Preserves internal indentation structure of test bodies
+ */
+function jestRebuildTestFile(
+    testBlocks: { name: string; body: string; fullBlock: string }[],
+    importStatement: string,
+    moduleName: string
+): string {
+    if (testBlocks.length === 0) {
+        console.warn('[Jest Rebuild] No test blocks to rebuild');
+        return '';
+    }
+    
+    // Process each test block with proper indentation
+    const indentedTests = testBlocks.map(test => {
+        const lines = test.fullBlock.split('\n');
+        
+        // Rebuild with consistent 2-space indentation
+        // test() line gets 2 spaces (inside describe)
+        // content inside test gets 4 spaces (2 for describe + 2 for test body)
+        // closing }); gets 2 spaces
+        return lines.map((line, idx) => {
+            const trimmed = line.trim();
+            if (trimmed.length === 0) return '';
+            
+            // First line: test('...', () => {
+            if (idx === 0) {
+                return '  ' + trimmed;
+            }
+            // Last line containing });
+            else if (trimmed === '});') {
+                return '  ' + trimmed;
+            }
+            // Content lines inside test body
+            else {
+                return '    ' + trimmed;
+            }
+        }).join('\n');
+    }).join('\n\n');
     
     return `${importStatement}
 
@@ -1579,6 +2203,63 @@ describe('${moduleName} Tests', () => {
 ${indentedTests}
 });
 `;
+}
+
+// ============================================================================
+// MAIN FUNCTION: Fix JavaScript/TypeScript test structure
+// ============================================================================
+
+/**
+ * Fix JavaScript/TypeScript test structure - ROBUST VERSION
+ * Pipeline: Auto-fix → Validate → Rebuild
+ */
+function fixJavaScriptStructure(code: string, language: string, moduleName: string): string {
+    console.log('[JS Structure Fix] Starting robust fix pipeline...');
+    
+    // ========================================
+    // PHASE 1: AUTO-FIX
+    // ========================================
+    const { fixedCode, testBlocks } = jestAutoFix(code);
+    
+    if (testBlocks.length === 0) {
+        console.warn('[JS Structure Fix] No valid test blocks found after auto-fix');
+        // Return original code as fallback
+        return code;
+    }
+    
+    // ========================================
+    // PHASE 2: EXTRACT SINGLE IMPORT
+    // ========================================
+    const importRegex = language === 'javascript'
+        ? /(?:const|let|var)\s+\{[^}]+\}\s*=\s*require\s*\([^)]+\)\s*;?/
+        : /import\s+\{[^}]+\}\s+from\s+['"][^'"]+['"]\s*;?/;
+    
+    const importMatch = code.match(importRegex);
+    const importStatement = importMatch 
+        ? importMatch[0].trim().replace(/;?$/, ';')
+        : (language === 'javascript' 
+            ? `const { } = require('./${moduleName}');`
+            : `import { } from './${moduleName}';`);
+    
+    // ========================================
+    // PHASE 3: REBUILD CLEAN OUTPUT
+    // ========================================
+    const rebuiltCode = jestRebuildTestFile(testBlocks, importStatement, moduleName);
+    
+    // ========================================
+    // PHASE 4: FINAL VALIDATION
+    // ========================================
+    const validation = jestValidateTestFile(rebuiltCode);
+    
+    if (!validation.valid) {
+        console.warn('[JS Structure Fix] Final validation failed:', validation.errors);
+        // Still return the rebuilt code, but log the issues
+    } else {
+        console.log('[JS Structure Fix] ✓ Final validation passed');
+    }
+    
+    console.log(`[JS Structure Fix] Rebuilt ${testBlocks.length} tests successfully`);
+    return rebuiltCode;
 }
 
 /**
