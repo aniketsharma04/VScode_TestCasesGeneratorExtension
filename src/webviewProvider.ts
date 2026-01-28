@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { GeneratedTests, TestCase } from './types';
-import { generateTests } from './testCaseGenerator';
+import { generateTests, generateTestsWithOrchestrator } from './testCaseGenerator';
 
 const execAsync = promisify(exec);
 let outputChannel: vscode.OutputChannel | null = null;
@@ -19,8 +19,9 @@ interface PanelContext {
     code: string;
     language: string;
     config: any;
-    allHistoricalTests: TestCase[];  // Track all tests ever generated for deduplication
-    generationRound: number;  // Track which generation round we're on
+    allHistoricalTests: TestCase[];
+    generationRound: number;
+    sourceFilePath?: string;
 }
 const panelContexts = new Map<string, PanelContext>();
 
@@ -49,12 +50,19 @@ export function createTestCasePanel(
     
     // Store panel context if provided
     if (code && config) {
+        // Capture the current source file path
+        const activeEditor = vscode.window.activeTextEditor;
+        const sourceFilePath = activeEditor?.document.uri.scheme === 'file' 
+            ? activeEditor.document.uri.fsPath 
+            : undefined;
+        
         panelContexts.set(panel.title, {
             code,
             language: tests.language,
             config,
             allHistoricalTests: [...tests.testCases],  // Initialize with first batch
-            generationRound: 1  // First generation
+            generationRound: 1,  // First generation
+            sourceFilePath  // Store source file path for running tests
         });
     }
     
@@ -68,7 +76,7 @@ export function createTestCasePanel(
 
     // Handle messages from WebView
     panel.webview.onDidReceiveMessage(
-        message => handleWebviewMessage(message, panel, tests, context),
+        (message: any) => handleWebviewMessage(message, panel, tests, context),
         undefined,
         context.subscriptions
     );
@@ -220,7 +228,8 @@ async function handleWebviewMessage(
             await runTestsWithFrameworkCheck(
                 message.content, 
                 message.language, 
-                message.framework
+                message.framework,
+                panel
             );
             break;
         
@@ -267,13 +276,26 @@ async function handleGenerateMore(
                 
                 progress.report({ increment: 30, message: 'Calling AI...' });
                 
-                const newTests = await generateTests(
-                    panelContext.code,
-                    panelContext.language as any,
-                    panelContext.config,
-                    currentTests.framework,
-                    allHistoricalTests  // Pass all historical tests
-                );
+                // Use orchestrator for JavaScript, regular generator for other languages
+                let newTests: GeneratedTests;
+                if (panelContext.language === 'javascript' && panelContext.sourceFilePath) {
+                    console.log('🚀 Using orchestrator for JavaScript test generation...');
+                    newTests = await generateTestsWithOrchestrator(
+                        panelContext.sourceFilePath,
+                        panelContext.code,
+                        panelContext.language as any,
+                        panelContext.config,
+                        currentTests.framework
+                    );
+                } else {
+                    newTests = await generateTests(
+                        panelContext.code,
+                        panelContext.language as any,
+                        panelContext.config,
+                        currentTests.framework,
+                        allHistoricalTests  // Pass all historical tests
+                    );
+                }
                 
                 progress.report({ increment: 70, message: 'Preparing new tests...' });
                 
@@ -387,7 +409,8 @@ async function saveTestsToFile(content: string, language: string): Promise<void>
 async function runTestsInTerminal(
     testCode: string,
     language: string,
-    framework: string
+    framework: string,
+    sourceFilePath?: string
 ): Promise<void> {
     try {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -400,11 +423,11 @@ async function runTestsInTerminal(
         // Create temporary test file
         const tempFileName = getTempTestFileName(language, framework);
         
-        // FIX MODULE PATHS BEFORE WRITING FILE
-        const fixedCode = await fixModulePaths(testCode, language);
+        // FIX MODULE PATHS BEFORE WRITING FILE (pass sourceFilePath for accurate path resolution)
+        const fixedCode = await fixModulePaths(testCode, language, sourceFilePath);
         
         // Determine best location for temp file (handles Java package paths)
-        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder, sourceFilePath);
         
         // Write test code to file with fixed paths
         const encoder = new TextEncoder();
@@ -419,19 +442,48 @@ async function runTestsInTerminal(
             return;
         }
         
-        // Create and show terminal
+        // CRITICAL FIX: Use the correct working directory
+        // Priority: sourceFilePath dir > active editor dir > temp file dir
+        const path = require('path');
+        let workingDir: string;
+        
+        if (sourceFilePath) {
+            workingDir = path.dirname(sourceFilePath);
+            console.log(`[runTestsInTerminal] Using source file directory: ${workingDir}`);
+        } else {
+            const activeEditor = vscode.window.activeTextEditor;
+            if (activeEditor && activeEditor.document.uri.scheme === 'file') {
+                workingDir = path.dirname(activeEditor.document.uri.fsPath);
+                console.log(`[runTestsInTerminal] Using active editor directory: ${workingDir}`);
+            } else {
+                workingDir = vscode.Uri.joinPath(tempFileUri, '..').fsPath;
+                console.log(`[runTestsInTerminal] Fallback to temp file directory: ${workingDir}`);
+            }
+        }
+        
+        // Verify temp file is in the working directory
+        const tempFileDir = path.dirname(tempFileUri.fsPath);
+        if (tempFileDir !== workingDir) {
+            console.warn(`[runTestsInTerminal] Warning: Temp file dir (${tempFileDir}) differs from working dir (${workingDir})`);
+        }
+        
+        // Create and show terminal with correct cwd
         const terminal = vscode.window.createTerminal({
             name: 'Test Runner',
-            cwd: workspaceFolder.uri.fsPath
+            cwd: workingDir
         });
         
         terminal.show();
         
         // Show info message with directory
-        vscode.window.showInformationMessage(`Running tests in: ${workspaceFolder.uri.fsPath}`);
+        vscode.window.showInformationMessage(`Running tests in: ${workingDir}`);
         
-        // Execute as a single command block to ensure directory context
-        const commandBlock = `cd "${workspaceFolder.uri.fsPath}"; Write-Host "Working Directory: $(Get-Location)" -ForegroundColor Green; ${testCommand}`;
+        // Get just the filename for the command (relative path)
+        const testFileName = path.basename(tempFileUri.fsPath);
+        const relativeTestCommand = testCommand.replace(new RegExp(testFileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), testFileName);
+        
+        // Execute command - no need to cd since terminal cwd is set correctly
+        const commandBlock = `Write-Host "Working Directory: ${workingDir}" -ForegroundColor Green; Write-Host "Test File: ${testFileName}" -ForegroundColor Cyan; ${relativeTestCommand}`;
         terminal.sendText(commandBlock);
         
         // Track temp file for cleanup on extension close (backup cleanup)
@@ -450,7 +502,7 @@ async function runTestsInTerminal(
             } catch (error) {
                 console.error('Failed to auto-delete temp file:', error);
             }
-        }, 30000); // 30 seconds delay to ensure tests finish reading the file
+        }, 60000); // 60 seconds delay to ensure tests finish reading the file
         
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to run tests: ${error.message}`);
@@ -461,11 +513,17 @@ async function runTestsInTerminal(
 /**
  * Fix module paths in generated test code
  */
-async function fixModulePaths(testCode: string, language: string): Promise<string> {
-    const editor = vscode.window.activeTextEditor;
+async function fixModulePaths(testCode: string, language: string, sourceFilePath?: string): Promise<string> {
+    // Use sourceFilePath if provided, otherwise fallback to active editor
+    let uri: vscode.Uri | undefined;
+    if (sourceFilePath) {
+        uri = vscode.Uri.file(sourceFilePath);
+    } else {
+        const editor = vscode.window.activeTextEditor;
+        uri = editor?.document.uri;
+    }
 
     // Fallback to original code if we cannot infer context
-    const uri = editor?.document.uri;
     const sourceFileName = uri?.path.split('/').pop() || 'module';
     const baseName = sourceFileName.replace(/\.[^.]+$/, '') || 'module';
 
@@ -533,7 +591,8 @@ async function fixModulePaths(testCode: string, language: string): Promise<strin
 async function runTestsWithOutput(
     testCode: string,
     language: string,
-    framework: string
+    framework: string,
+    sourceFilePath?: string
 ): Promise<void> {
     try {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -558,11 +617,11 @@ async function runTestsWithOutput(
         // Create temp file
         const tempFileName = getTempTestFileName(language, framework);
         
-        // FIX MODULE PATHS BEFORE WRITING FILE
-        const fixedCode = await fixModulePaths(testCode, language);
+        // FIX MODULE PATHS BEFORE WRITING FILE (pass sourceFilePath for accurate path resolution)
+        const fixedCode = await fixModulePaths(testCode, language, sourceFilePath);
         
         // Determine best location for temp file (handles Java package paths)
-        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder);
+        const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder, sourceFilePath);
         
         // Write fixed code to temp file
         const encoder = new TextEncoder();
@@ -580,10 +639,26 @@ async function runTestsWithOutput(
         outputChannel.appendLine(`Command: ${testCommand}`);
         outputChannel.appendLine('');
 
+        // Determine the correct working directory (source file dir > active editor dir > workspace)
+        let workingDir = workspaceFolder.uri.fsPath;
+        if (sourceFilePath) {
+            workingDir = require('path').dirname(sourceFilePath);
+            console.log(`[runTestsWithOutput] Using source file directory: ${workingDir}`);
+        } else {
+            const activeEditor = vscode.window.activeTextEditor;
+            if (activeEditor && activeEditor.document.uri.scheme === 'file') {
+                workingDir = require('path').dirname(activeEditor.document.uri.fsPath);
+                console.log(`[runTestsWithOutput] Using active editor directory: ${workingDir}`);
+            }
+        }
+        
+        outputChannel.appendLine(`Working Directory: ${workingDir}`);
+        outputChannel.appendLine('');
+
         // Execute tests
         try {
             const { stdout, stderr } = await execAsync(testCommand, {
-                cwd: workspaceFolder.uri.fsPath,
+                cwd: workingDir,
                 timeout: 30000 // 30 second timeout
             });
 
@@ -666,10 +741,30 @@ async function getTempFileUri(
     language: string,
     tempFileName: string,
     testCode: string,
-    workspaceFolder: vscode.WorkspaceFolder
+    workspaceFolder: vscode.WorkspaceFolder,
+    sourceFilePath?: string
 ): Promise<vscode.Uri> {
-    // Default: workspace root
+    // CRITICAL: Place temp test file in same directory as source file
+    // This ensures require('./module') works correctly
+    
     let baseDir = workspaceFolder.uri;
+    
+    if (sourceFilePath) {
+        // Use the stored source file path
+        const sourceFileUri = vscode.Uri.file(sourceFilePath);
+        const sourceFileDir = vscode.Uri.joinPath(sourceFileUri, '..');
+        baseDir = sourceFileDir;
+        console.log(`[Temp File] Creating test file in same directory as source: ${sourceFileDir.fsPath}`);
+    } else {
+        // Fallback: try to get from active editor
+        const activeEditor = vscode.window.activeTextEditor;
+        if (activeEditor && activeEditor.document.uri.scheme === 'file') {
+            const sourceFileUri = activeEditor.document.uri;
+            const sourceFileDir = vscode.Uri.joinPath(sourceFileUri, '..');
+            baseDir = sourceFileDir;
+            console.log(`[Temp File] Creating test file in same directory as active editor: ${sourceFileDir.fsPath}`);
+        }
+    }
 
     if (language === 'java') {
         // Place temp tests under src/test/java respecting package path when present
@@ -919,8 +1014,15 @@ async function installFramework(framework: string): Promise<void> {
 async function runTestsWithFrameworkCheck(
     testCode: string,
     language: string,
-    framework: string
+    framework: string,
+    panel?: vscode.WebviewPanel
 ): Promise<void> {
+    // Extract source file path from panel context
+    let sourceFilePath: string | undefined;
+    if (panel) {
+        const panelContext = panelContexts.get(panel.title);
+        sourceFilePath = panelContext?.sourceFilePath;
+    }
     // Check if framework is installed
     const isInstalled = await checkFrameworkInstalled(framework);
     
@@ -944,8 +1046,8 @@ async function runTestsWithFrameworkCheck(
     vscode.window.showInformationMessage('Running tests in Terminal and Output panel...');
 
     // Run terminal first (streams live), then output channel (captured results)
-    await runTestsInTerminal(testCode, language, framework);
-    await runTestsWithOutput(testCode, language, framework);
+    await runTestsInTerminal(testCode, language, framework, sourceFilePath);
+    await runTestsWithOutput(testCode, language, framework, sourceFilePath);
 }
 
 /**

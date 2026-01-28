@@ -65,7 +65,7 @@ export class TestGeneratorViewProvider implements vscode.TreeDataProvider<TestGe
                 {
                     command: 'workbench.action.openSettings',
                     title: 'Settings',
-                    arguments: ['@ext:your-publisher-name.testcase-generator']
+                    arguments: ['@ext:aniketsharma04.testcase-generator']
                 }
             ),
             new TestGeneratorItem(
@@ -113,7 +113,7 @@ export function registerSidebarView(context: vscode.ExtensionContext) {
 
     // Register documentation command
     const docsCommand = vscode.commands.registerCommand('testcase-generator.openDocs', () => {
-        vscode.env.openExternal(vscode.Uri.parse('https://github.com/yourusername/ai-testcase-generator#readme'));
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/aniketsharma04/VScode_TestCasesGeneratorExtension#readme'));
     });
 
     // Show welcome message with button to open sidebar
