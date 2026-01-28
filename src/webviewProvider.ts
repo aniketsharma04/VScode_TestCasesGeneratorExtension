@@ -423,8 +423,8 @@ async function runTestsInTerminal(
         // Create temporary test file
         const tempFileName = getTempTestFileName(language, framework);
         
-        // FIX MODULE PATHS BEFORE WRITING FILE
-        const fixedCode = await fixModulePaths(testCode, language);
+        // FIX MODULE PATHS BEFORE WRITING FILE (pass sourceFilePath for accurate path resolution)
+        const fixedCode = await fixModulePaths(testCode, language, sourceFilePath);
         
         // Determine best location for temp file (handles Java package paths)
         const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder, sourceFilePath);
@@ -513,11 +513,17 @@ async function runTestsInTerminal(
 /**
  * Fix module paths in generated test code
  */
-async function fixModulePaths(testCode: string, language: string): Promise<string> {
-    const editor = vscode.window.activeTextEditor;
+async function fixModulePaths(testCode: string, language: string, sourceFilePath?: string): Promise<string> {
+    // Use sourceFilePath if provided, otherwise fallback to active editor
+    let uri: vscode.Uri | undefined;
+    if (sourceFilePath) {
+        uri = vscode.Uri.file(sourceFilePath);
+    } else {
+        const editor = vscode.window.activeTextEditor;
+        uri = editor?.document.uri;
+    }
 
     // Fallback to original code if we cannot infer context
-    const uri = editor?.document.uri;
     const sourceFileName = uri?.path.split('/').pop() || 'module';
     const baseName = sourceFileName.replace(/\.[^.]+$/, '') || 'module';
 
@@ -611,8 +617,8 @@ async function runTestsWithOutput(
         // Create temp file
         const tempFileName = getTempTestFileName(language, framework);
         
-        // FIX MODULE PATHS BEFORE WRITING FILE
-        const fixedCode = await fixModulePaths(testCode, language);
+        // FIX MODULE PATHS BEFORE WRITING FILE (pass sourceFilePath for accurate path resolution)
+        const fixedCode = await fixModulePaths(testCode, language, sourceFilePath);
         
         // Determine best location for temp file (handles Java package paths)
         const tempFileUri = await getTempFileUri(language, tempFileName, fixedCode, workspaceFolder, sourceFilePath);

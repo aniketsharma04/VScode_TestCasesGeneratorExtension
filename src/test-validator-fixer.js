@@ -9,6 +9,23 @@ const vm = require('vm');
 const ImprovedTestExtractor = require('./improved-test-extractor');
 
 class TestFileFixer {
+    /**
+     * Static method for validating JavaScript syntax (integration-friendly)
+     * Allows: await TestFileFixer.validate(content)
+     */
+    static async validate(content) {
+      try {
+        const vm = require('vm');
+        new vm.Script(content);
+        return { valid: true };
+      } catch (error) {
+        return {
+          valid: false,
+          error: error.message,
+          stack: error.stack
+        };
+      }
+    }
   constructor(sourceFilePath, generatedTestContent) {
     this.sourceFilePath = sourceFilePath;
     this.generatedTestContent = generatedTestContent;

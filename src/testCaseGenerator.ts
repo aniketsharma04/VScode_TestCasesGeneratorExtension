@@ -281,29 +281,49 @@ async function generateWithGeminiUsingPrompt(
     prompt: string,
     config: ExtensionConfig
 ): Promise<string> {
-    const genAI = new GoogleGenerativeAI(config.apiKey);
-    const model = genAI.getGenerativeModel({ 
-        model: config.model || 'gemini-2.5-flash'
-    });
+    const modelName = config.model || 'gemini-2.5-flash';
+    console.log(`📤 Sending optimized prompt to Gemini (model: ${modelName})...`);
+    console.log(`   API Key: ${config.apiKey ? config.apiKey.substring(0, 10) + '...' : 'NOT SET'}`);
     
-    console.log('📤 Sending optimized prompt to Gemini...');
-    
-    const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-            temperature: config.temperature || 0.7,
-            maxOutputTokens: config.maxTokens || 4096,
-        }
-    });
-    
-    const response = result.response;
-    const text = response.text();
-    
-    if (!text) {
-        throw new Error('No text response from Gemini');
+    if (!config.apiKey) {
+        throw new Error('Gemini API key is not configured. Please set your API key in the extension settings.');
     }
     
-    return text;
+    try {
+        const genAI = new GoogleGenerativeAI(config.apiKey);
+        const model = genAI.getGenerativeModel({ 
+            model: modelName
+        });
+        
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+                temperature: config.temperature || 0.7,
+                maxOutputTokens: config.maxTokens || 4096,
+            }
+        });
+        
+        const response = result.response;
+        const text = response.text();
+        
+        if (!text) {
+            throw new Error('No text response from Gemini');
+        }
+        
+        console.log(`✓ Gemini returned ${text.length} characters`);
+        return text;
+    } catch (error: any) {
+        console.error('❌ Gemini API Error Details:');
+        console.error(`   Error name: ${error.name}`);
+        console.error(`   Error message: ${error.message}`);
+        if (error.status) {
+            console.error(`   HTTP Status: ${error.status}`);
+        }
+        if (error.errorDetails) {
+            console.error(`   Error details: ${JSON.stringify(error.errorDetails)}`);
+        }
+        throw error;
+    }
 }
 
 /**
