@@ -167,7 +167,7 @@
     "@types/babel__traverse": "^7.20.6",
     "@types/mocha": "^10.0.10",
     "@types/node": "18.x",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.108.1",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^9.39.2",

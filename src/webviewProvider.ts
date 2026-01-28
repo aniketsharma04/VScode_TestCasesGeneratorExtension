@@ -19,9 +19,9 @@ interface PanelContext {
     code: string;
     language: string;
     config: any;
-    allHistoricalTests: TestCase[];  // Track all tests ever generated for deduplication
-    generationRound: number;  // Track which generation round we're on
-    sourceFilePath?: string;  // Path to the source file being tested
+    allHistoricalTests: TestCase[];
+    generationRound: number;
+    sourceFilePath?: string;
 }
 const panelContexts = new Map<string, PanelContext>();
 
@@ -76,7 +76,7 @@ export function createTestCasePanel(
 
     // Handle messages from WebView
     panel.webview.onDidReceiveMessage(
-        message => handleWebviewMessage(message, panel, tests, context),
+        (message: any) => handleWebviewMessage(message, panel, tests, context),
         undefined,
         context.subscriptions
     );
