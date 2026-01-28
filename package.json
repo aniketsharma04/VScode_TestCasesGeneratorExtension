@@ -3,11 +3,11 @@
   "displayName": "AI Test Case Generator",
   "description": "Automatically generate comprehensive test cases for code using AI (Anthropic Claude or Google Gemini)",
   "version": "0.0.1",
-  "publisher": "your-publisher-name",
-  "icon": "media/icon.png",
+  "publisher": "aniketsharma04",
+  "icon": "media/navyug-icon-light.svg",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/ai-testcase-generator"
+    "url": "https://github.com/aniketsharma04/VScode_TestCasesGeneratorExtension"
   },
   "engines": {
     "vscode": "^1.85.0"

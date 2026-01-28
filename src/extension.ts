@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { getConfig, getApiKey, promptForApiKey, storeApiKey } from './config';
 import { getLanguageFromDocument, showLanguageSelector, validateCode } from './languageDetector';
-import { generateTests } from './testCaseGenerator';
+import { generateTests, generateTestsWithOrchestrator } from './testCaseGenerator';
 import { createTestCasePanel, cleanupTempFiles } from './webviewProvider';
 import { registerSidebarView } from './sidebarProvider';
 import type { SupportedLanguage } from './types';
@@ -130,7 +130,20 @@ async function handleGenerateTests(context: vscode.ExtensionContext) {
                 try {
                     // Generate tests
                     progress.report({ increment: 30, message: `Calling ${config.apiProvider === 'anthropic' ? 'Claude' : 'Gemini'}...` });
-                    const tests = await generateTests(code, language as SupportedLanguage, config);
+                    
+                    // Use orchestrator for JavaScript files with file path
+                    let tests;
+                    if (language === 'javascript' && document.uri.scheme === 'file') {
+                        console.log('🚀 Using orchestrator for JavaScript test generation...');
+                        tests = await generateTestsWithOrchestrator(
+                            document.uri.fsPath,
+                            code,
+                            language as SupportedLanguage,
+                            config
+                        );
+                    } else {
+                        tests = await generateTests(code, language as SupportedLanguage, config);
+                    }
 
                     progress.report({ increment: 60, message: 'Processing results...' });
 
@@ -217,7 +230,21 @@ async function handleGenerateFromSelection(context: vscode.ExtensionContext) {
             },
             async (progress) => {
                 progress.report({ increment: 30 });
-                const tests = await generateTests(code, language as SupportedLanguage, config);
+                
+                // Use orchestrator for JavaScript files with file path
+                let tests;
+                if (language === 'javascript' && editor.document.uri.scheme === 'file') {
+                    console.log('🚀 Using orchestrator for JavaScript test generation...');
+                    tests = await generateTestsWithOrchestrator(
+                        editor.document.uri.fsPath,
+                        code,
+                        language as SupportedLanguage,
+                        config
+                    );
+                } else {
+                    tests = await generateTests(code, language as SupportedLanguage, config);
+                }
+                
                 progress.report({ increment: 60 });
                 createTestCasePanel(context, tests, code, config);
                 progress.report({ increment: 100 });
@@ -309,7 +336,7 @@ function showWelcomeMessage(context: vscode.ExtensionContext) {
         if (selection === 'Configure API Key') {
             vscode.commands.executeCommand('testcase-generator.configure');
         } else if (selection === 'Learn More') {
-            vscode.env.openExternal(vscode.Uri.parse('https://github.com/yourusername/ai-testcase-generator'));
+            vscode.env.openExternal(vscode.Uri.parse('https://github.com/aniketsharma04/VScode_TestCasesGeneratorExtension'));
         }
     });
 }
