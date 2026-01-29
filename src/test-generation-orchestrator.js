@@ -116,20 +116,20 @@ class TestGenerationOrchestrator {
 
     try {
       // Step 1: Analyze source file
-      console.log('📊 Analyzing source file...');
+      console.log('Analyzing source file...');
       const analysis = this.analyzeSourceFile(sourceFilePath);
       console.log(`✓ Found: ${analysis.exports.type} module`);
       console.log(`  - Classes: ${analysis.exports.classes.join(', ') || 'none'}`);
       console.log(`  - Functions: ${analysis.exports.functions.join(', ') || 'none'}`);
       
       // Step 2: Generate optimized prompt
-      console.log('\n📝 Generating optimized prompt...');
+      console.log('\n Generating optimized prompt...');
       const prompt = this.generateOptimizedPrompt(analysis);
       
       // Step 3: Call AI to generate tests (with retries)
       let generatedContent = null;
       for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
-        console.log(`\n🤖 Attempt ${attempt}: Calling AI to generate tests...`);
+        console.log(`\n Attempt ${attempt}: Calling AI to generate tests...`);
         
         try {
           generatedContent = await aiGenerateFunction(prompt);
@@ -212,7 +212,7 @@ class TestGenerationOrchestrator {
       const testFileName = `temp.test.${Date.now()}.js`;
       const testFilePath = path.join(path.dirname(sourceFilePath), testFileName);
       
-      console.log(`\n💾 Saving test file: ${testFileName}`);
+      console.log(`\n Saving test file: ${testFileName}`);
       fs.writeFileSync(testFilePath, generatedContent);
       console.log('✓ Test file saved successfully');
       

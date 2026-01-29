@@ -252,7 +252,7 @@ async function generateWithClaudeUsingPrompt(
         apiKey: config.apiKey
     });
     
-    console.log('📤 Sending optimized prompt to Claude...');
+    console.log('Sending optimized prompt to Claude...');
     
     const message = await anthropic.messages.create({
         model: config.model || 'claude-sonnet-4-20250514',
